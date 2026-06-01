@@ -12,18 +12,20 @@ import 'session_models.dart';
 class AuthRepository {
   AuthRepository({
     required this.api,
+    required this.authApi,
     required this.identity,
     required this.store,
   });
 
-  final ApiClient api;
+  final ApiClient api;       // cliente autenticado (Bearer) -> /me
+  final ApiClient authApi;   // cliente plano -> enroll/challenge/token
   final DeviceIdentityService identity;
   final SecureStore store;
 
   /// Alta del dispositivo. Devuelve el estado (normalmente 'pending').
   Future<EnrollmentState> enroll({String? name, String? platform}) async {
     final publicKey = await identity.getOrCreatePublicKey();
-    final res = await api.postJson('/enroll', data: {
+    final res = await authApi.postJson('/enroll', data: {
       'public_key': publicKey,
       if (name != null) 'name': name,
       if (platform != null) 'platform': platform,
@@ -39,13 +41,13 @@ class AuthRepository {
     final deviceId = await store.readDeviceId();
     if (deviceId == null) return null;
 
-    final challenge = await api.postJson('/auth/challenge', data: {'device_id': deviceId});
+    final challenge = await authApi.postJson('/auth/challenge', data: {'device_id': deviceId});
     final nonce = challenge['nonce']?.toString();
     if (nonce == null) return null;
 
     final signature = await identity.signNonce(nonce);
 
-    final tokenRes = await api.postJson('/auth/token', data: {
+    final tokenRes = await authApi.postJson('/auth/token', data: {
       'device_id': deviceId,
       'nonce': nonce,
       'signature': signature,
