@@ -48,7 +48,8 @@ class _WorksheetScreenState extends ConsumerState<WorksheetScreen> {
         'x_aplicar_minimo': _aplicarMinimo,
         'x_identificacion_sig': _firmante.text,
         if (_horasReales.text.isNotEmpty) 'x_horas_reales': double.tryParse(_horasReales.text) ?? 0,
-        if (_horasFacturar.text.isNotEmpty) 'x_horas_facturar': double.tryParse(_horasFacturar.text) ?? 0,
+        if (!_aplicarMinimo && _horasFacturar.text.isNotEmpty)
+          'x_horas_facturar': double.tryParse(_horasFacturar.text) ?? 0,
       });
       ref.invalidate(taskDetailProvider(widget.task.id));
       if (mounted) Navigator.pop(context);
@@ -69,7 +70,11 @@ class _WorksheetScreenState extends ConsumerState<WorksheetScreen> {
           Row(children: [
             Expanded(child: _num(_horasReales, 'Horas reales')),
             const SizedBox(width: 12),
-            Expanded(child: _num(_horasFacturar, 'Horas a facturar')),
+            Expanded(
+              child: _aplicarMinimo
+                  ? _MinimoNote(cantidad: widget.task.worksheet.cantidadPedida)
+                  : _num(_horasFacturar, 'Horas a facturar'),
+            ),
           ]),
           const SizedBox(height: 12),
           TextField(controller: _albaran, decoration: const InputDecoration(labelText: 'Nº Albarán')),
@@ -107,4 +112,30 @@ class _WorksheetScreenState extends ConsumerState<WorksheetScreen> {
         keyboardType: const TextInputType.numberWithOptions(decimal: true),
         decoration: InputDecoration(labelText: label),
       );
+}
+
+/// Sustituye al campo "Horas a facturar" cuando se aplica el mínimo: las horas
+/// pasan a ser la cantidad pedida del pedido (la calcula el servidor).
+class _MinimoNote extends StatelessWidget {
+  const _MinimoNote({this.cantidad});
+  final double? cantidad;
+  @override
+  Widget build(BuildContext context) {
+    final txt = cantidad == null
+        ? 'Se facturará la cantidad pedida'
+        : 'Se facturará la cantidad pedida: ${cantidad!.toStringAsFixed(2)}';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.amber.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.amber.shade200),
+      ),
+      child: Row(children: [
+        Icon(Icons.lock_clock, size: 18, color: Colors.amber.shade800),
+        const SizedBox(width: 8),
+        Expanded(child: Text(txt, style: const TextStyle(fontSize: 12))),
+      ]),
+    );
+  }
 }

@@ -71,6 +71,7 @@ class Worksheet {
   final String? obsAlbaran, obsCliente, identificacionSig;
   final bool cambioProducto, aplicarMinimo, hasSignature;
   final double horasReales, horasFacturar;
+  final double? cantidadPedida;
   const Worksheet({
     this.obsAlbaran,
     this.obsCliente,
@@ -80,6 +81,7 @@ class Worksheet {
     this.hasSignature = false,
     this.horasReales = 0,
     this.horasFacturar = 0,
+    this.cantidadPedida,
   });
   factory Worksheet.fromJson(Map<String, dynamic> j) => Worksheet(
         obsAlbaran: j['obs_albaran']?.toString(),
@@ -90,6 +92,7 @@ class Worksheet {
         hasSignature: j['has_signature'] == true,
         horasReales: (j['horas_reales'] ?? 0).toDouble(),
         horasFacturar: (j['horas_facturar'] ?? 0).toDouble(),
+        cantidadPedida: j['cantidad_pedida'] == null ? null : (j['cantidad_pedida']).toDouble(),
       );
 }
 

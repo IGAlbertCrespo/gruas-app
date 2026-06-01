@@ -21,13 +21,23 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> {
     return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
   }
 
+  /// Ubicación "best-effort": si no hay permiso, servicio o tarda demasiado,
+  /// devuelve (null, null) y el fichaje continúa igualmente sin coordenadas.
   Future<(double?, double?)> _location() async {
     try {
-      final perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) await Geolocator.requestPermission();
-      final pos = await Geolocator.getCurrentPosition();
+      if (!await Geolocator.isLocationServiceEnabled()) return (null, null);
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+        return (null, null);
+      }
+      final pos = await Geolocator.getCurrentPosition()
+          .timeout(const Duration(seconds: 5));
       return (pos.latitude, pos.longitude);
     } catch (_) {
+      // Sin GPS, timeout o cualquier error: fichamos sin ubicación.
       return (null, null);
     }
   }

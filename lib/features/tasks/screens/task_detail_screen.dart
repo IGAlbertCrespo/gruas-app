@@ -120,58 +120,54 @@ class _ActionsBar extends StatelessWidget {
             const SizedBox(width: 8),
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: () => Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => SignatureScreen(taskId: task.id))),
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => SignatureScreen(
+                      taskId: task.id,
+                      initialSigner: task.worksheet.identificacionSig,
+                    ),
+                  ),
+                ),
                 icon: const Icon(Icons.draw),
                 label: const Text('Firmar'),
               ),
             ),
             const SizedBox(width: 8),
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: () => _changeStage(context),
-                icon: const Icon(Icons.flag),
-                label: const Text('Etapa'),
-              ),
-            ),
+            Expanded(child: _stageButton(context)),
           ],
         ),
       ),
     );
   }
 
-  void _changeStage(BuildContext context) {
-    // El conjunto de transiciones que muestra la app es decisión de negocio.
-    const options = {
-      'finalizada': 'Finalizada',
-      'revisado': 'Revisado',
-      'cancelado': 'Cancelado',
+  /// Toggle de etapa: Informado -> Finalizada, y Finalizada -> Informado.
+  Widget _stageButton(BuildContext context) {
+    final alias = task.stage.alias;
+    final (String target, String label, IconData icon)? action = switch (alias) {
+      'Informado' => ('finalizada', 'Finalizar', Icons.check_circle),
+      'Finalizada' => ('informada', 'Reabrir', Icons.undo),
+      _ => null,
     };
-    showModalBottomSheet(
-      context: context,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final e in options.entries)
-              ListTile(
-                title: Text(e.value),
-                onTap: () async {
-                  Navigator.pop(context);
-                  try {
-                    await ref.read(tasksRepoProvider).changeStage(task.id, e.key);
-                    ref.invalidate(taskDetailProvider(task.id));
-                    ref.invalidate(tasksListProvider);
-                  } catch (err) {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$err')));
-                    }
-                  }
-                },
-              ),
-          ],
-        ),
-      ),
+    if (action == null) {
+      return const SizedBox.shrink();
+    }
+    return FilledButton.icon(
+      onPressed: () => _setStage(context, action.$1),
+      icon: Icon(action.$3),
+      label: Text(action.$2),
     );
+  }
+
+  Future<void> _setStage(BuildContext context, String target) async {
+    try {
+      await ref.read(tasksRepoProvider).changeStage(task.id, target);
+      ref.invalidate(taskDetailProvider(task.id));
+      ref.invalidate(tasksListProvider);
+    } catch (err) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$err')));
+      }
+    }
   }
 }

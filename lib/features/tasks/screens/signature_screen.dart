@@ -7,15 +7,17 @@ import '../tasks_providers.dart';
 
 /// Captura la firma del cliente y la sube como PNG base64.
 class SignatureScreen extends ConsumerStatefulWidget {
-  const SignatureScreen({super.key, required this.taskId});
+  const SignatureScreen({super.key, required this.taskId, this.initialSigner});
   final int taskId;
+  final String? initialSigner;
   @override
   ConsumerState<SignatureScreen> createState() => _SignatureScreenState();
 }
 
 class _SignatureScreenState extends ConsumerState<SignatureScreen> {
   final _controller = SignatureController(penStrokeWidth: 3, penColor: Colors.black);
-  final _signer = TextEditingController();
+  late final TextEditingController _signer =
+      TextEditingController(text: widget.initialSigner ?? '');
   bool _busy = false;
 
   @override
