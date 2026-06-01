@@ -1,0 +1,46 @@
+name: gruas_app
+description: APP móvil Grúas Salvador (conductores y jefes de tráfico).
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Estado
+  flutter_riverpod: ^2.5.1
+
+  # Navegación
+
+  # Red
+  dio: ^5.5.0
+
+  # Almacenamiento seguro (token de sesión + perfil de entorno)
+  flutter_secure_storage: ^9.2.2
+
+  # Identidad criptográfica en hardware (P-256 / Secure Enclave / Keystore).
+  # Aislado tras DeviceIdentityService; puede sustituirse por biometric_signature.
+  secp256r1: ^0.5.0
+
+  # QR de aprovisionamiento (cliente + entorno)
+  mobile_scanner: ^5.1.1
+
+  # Firma del cliente en la tarea
+  signature: ^5.5.0
+
+  # Geolocalización del fichaje
+  geolocator: ^12.0.0
+
+  # Utilidades
+  intl: ^0.19.0
+  collection: ^1.18.0
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
