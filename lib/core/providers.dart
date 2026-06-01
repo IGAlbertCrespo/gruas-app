@@ -7,7 +7,7 @@ import 'network/api_client.dart';
 import 'network/auth_interceptor.dart';
 import 'storage/secure_store.dart';
 import '../features/identity/device_identity_service.dart';
-import '../features/identity/secp256r1_identity_service.dart';
+import '../features/identity/keystore_identity_service.dart';
 import '../features/auth/auth_repository.dart';
 
 /// Almacenamiento seguro.
@@ -19,7 +19,7 @@ final secureStoreProvider = Provider<SecureStore>((ref) {
 
 /// Identidad criptográfica del dispositivo (P-256 en hardware).
 final identityProvider = Provider<DeviceIdentityService>((ref) {
-  return Secp256r1IdentityService();
+  return KeystoreIdentityService();
 });
 
 /// Perfil de conexión activo (base_url + db). Se carga del almacén seguro.

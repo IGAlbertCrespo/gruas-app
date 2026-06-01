@@ -14,17 +14,11 @@ dependencies:
   # Estado
   flutter_riverpod: ^2.5.1
 
-  # Navegación
-
   # Red
   dio: ^5.5.0
 
   # Almacenamiento seguro (token de sesión + perfil de entorno)
   flutter_secure_storage: ^9.2.2
-
-  # Identidad criptográfica en hardware (P-256 / Secure Enclave / Keystore).
-  # Aislado tras DeviceIdentityService; puede sustituirse por biometric_signature.
-  secp256r1: ^0.1.0-dev.9
 
   # QR de aprovisionamiento (cliente + entorno)
   mobile_scanner: ^5.1.1

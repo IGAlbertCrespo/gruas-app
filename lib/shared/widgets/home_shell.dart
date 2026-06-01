@@ -56,13 +56,15 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           Expanded(child: tabs[idx].page),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: idx,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: [
-          for (final t in tabs) NavigationDestination(icon: Icon(t.icon), label: t.label),
-        ],
-      ),
+      bottomNavigationBar: tabs.length < 2
+          ? null
+          : NavigationBar(
+              selectedIndex: idx,
+              onDestinationSelected: (i) => setState(() => _index = i),
+              destinations: [
+                for (final t in tabs) NavigationDestination(icon: Icon(t.icon), label: t.label),
+              ],
+            ),
     );
   }
 
