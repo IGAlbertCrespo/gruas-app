@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -5,7 +6,29 @@ import 'package:geolocator/geolocator.dart';
 import '../../tasks/tasks_providers.dart';
 import '../attendance_models.dart';
 import '../attendance_repository.dart';
-import 'dart:math';
+
+/// Resumen de la última jornada cerrada (se muestra hasta el siguiente fichaje).
+class _JourneySummary {
+  final DateTime entrada;
+  final DateTime salida;
+  final Duration bruta;
+  final Duration pausas;
+  final Duration efectivas;
+  const _JourneySummary(this.entrada, this.salida, this.bruta, this.pausas, this.efectivas);
+}
+
+Duration _fromHours(double h) => Duration(milliseconds: (h * 3600000).round());
+
+String _hms(Duration d) {
+  if (d.isNegative) d = Duration.zero;
+  final h = d.inHours, m = d.inMinutes % 60, s = d.inSeconds % 60;
+  return '${h}h ${m.toString().padLeft(2, '0')}m ${s.toString().padLeft(2, '0')}s';
+}
+
+String _hm(DateTime dt) {
+  final l = dt.toLocal();
+  return '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
+}
 
 class AttendanceScreen extends ConsumerStatefulWidget {
   const AttendanceScreen({super.key});
@@ -13,31 +36,48 @@ class AttendanceScreen extends ConsumerStatefulWidget {
   ConsumerState<AttendanceScreen> createState() => _AttendanceScreenState();
 }
 
-class _AttendanceScreenState extends ConsumerState<AttendanceScreen> {
+class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with WidgetsBindingObserver {
   bool _busy = false;
+  DateTime? _breakStart; // inicio de la pausa en curso (lo conoce la app)
+  _JourneySummary? _lastSummary;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Al volver a primer plano, recalculamos (refrescamos el estado).
+    if (state == AppLifecycleState.resumed && mounted) {
+      ref.invalidate(attendanceStateProvider);
+      setState(() {});
+    }
+  }
 
   String _uuid() {
     final r = Random();
     return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
   }
 
-  /// Ubicación "best-effort": si no hay permiso, servicio o tarda demasiado,
-  /// devuelve (null, null) y el fichaje continúa igualmente sin coordenadas.
   Future<(double?, double?)> _location() async {
     try {
       if (!await Geolocator.isLocationServiceEnabled()) return (null, null);
       var perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.denied) {
-        perm = await Geolocator.requestPermission();
-      }
+      if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
       if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
         return (null, null);
       }
-      final pos = await Geolocator.getCurrentPosition()
-          .timeout(const Duration(seconds: 5));
+      final pos = await Geolocator.getCurrentPosition().timeout(const Duration(seconds: 5));
       return (pos.latitude, pos.longitude);
     } catch (_) {
-      // Sin GPS, timeout o cualquier error: fichamos sin ubicación.
       return (null, null);
     }
   }
@@ -48,9 +88,48 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> {
       await action(ref.read(attendanceRepoProvider));
       ref.invalidate(attendanceStateProvider);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  ({Duration bruta, Duration pausas, Duration efectivas}) _compute(AttendanceState st) {
+    if (!st.hasOpen || st.checkIn == null) {
+      return (bruta: Duration.zero, pausas: Duration.zero, efectivas: Duration.zero);
+    }
+    final now = DateTime.now();
+    final bruta = now.difference(st.checkIn!);
+    final cerradas = _fromHours(st.totalBreakTime);
+    final enCurso = (st.isOnBreak && _breakStart != null) ? now.difference(_breakStart!) : Duration.zero;
+    final pausas = cerradas + enCurso;
+    return (bruta: bruta, pausas: pausas, efectivas: bruta - pausas);
+  }
+
+  Future<void> _checkIn() async {
+    setState(() {
+      _lastSummary = null;
+      _breakStart = null;
+    });
+    await _run((repo) async {
+      final (lat, lng) = await _location();
+      await repo.checkIn(_uuid(), lat: lat, lng: lng);
+    });
+  }
+
+  Future<void> _checkOut(AttendanceState st) async {
+    final c = _compute(st);
+    final summary = _JourneySummary(
+      st.checkIn!.toLocal(), DateTime.now(), c.bruta, c.pausas, c.efectivas);
+    setState(() => _busy = true);
+    try {
+      final (lat, lng) = await _location();
+      await ref.read(attendanceRepoProvider).checkOut(_uuid(), attendanceId: st.attendanceId, lat: lat, lng: lng);
+      _breakStart = null;
+      _lastSummary = summary;
+      ref.invalidate(attendanceStateProvider);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -59,23 +138,24 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> {
   @override
   Widget build(BuildContext context) {
     final stateAsync = ref.watch(attendanceStateProvider);
-
     return RefreshIndicator(
-      onRefresh: () async => ref.invalidate(attendanceStateProvider),
+      onRefresh: () async {
+        ref.invalidate(attendanceStateProvider);
+      },
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           stateAsync.when(
-            loading: () => const Padding(
-                padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator())),
+            loading: () => const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator())),
             error: (e, _) => _ErrorCard(message: '$e', onRetry: () => ref.invalidate(attendanceStateProvider)),
-            data: (st) => _StatusCard(state: st),
+            data: (st) => _StatusCard(state: st, totals: _compute(st)),
           ),
+          if (_lastSummary != null) ...[
+            const SizedBox(height: 8),
+            _SummaryCard(summary: _lastSummary!),
+          ],
           const SizedBox(height: 8),
-          stateAsync.maybeWhen(
-            data: (st) => _actions(st),
-            orElse: () => const SizedBox.shrink(),
-          ),
+          stateAsync.maybeWhen(data: (st) => _actions(st), orElse: () => const SizedBox.shrink()),
         ],
       ),
     );
@@ -84,10 +164,7 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> {
   Widget _actions(AttendanceState st) {
     if (!st.hasOpen) {
       return FilledButton.icon(
-        onPressed: _busy ? null : () => _run((repo) async {
-          final (lat, lng) = await _location();
-          await repo.checkIn(_uuid(), lat: lat, lng: lng);
-        }),
+        onPressed: _busy ? null : _checkIn,
         icon: const Icon(Icons.login),
         label: const Text('Fichar entrada'),
       );
@@ -95,33 +172,35 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> {
     return Column(
       children: [
         if (!st.isOnBreak)
-          _BreakStartButton(busy: _busy, onStart: (typeId) => _run((repo) async {
-            await repo.breakStart(_uuid(), attendanceId: st.attendanceId, breakTypeId: typeId);
-          }))
+          _BreakStartButton(busy: _busy, onStart: (typeId) {
+            _breakStart = DateTime.now();
+            _run((repo) async {
+              await repo.breakStart(_uuid(), attendanceId: st.attendanceId, breakTypeId: typeId);
+            });
+          })
         else
           FilledButton.icon(
             style: FilledButton.styleFrom(backgroundColor: Colors.orange.shade700),
-            onPressed: _busy ? null : () => _run((repo) async {
-              await repo.breakEnd(_uuid(), breakId: st.currentBreakId, attendanceId: st.attendanceId);
-            }),
+            onPressed: _busy ? null : () {
+              _breakStart = null;
+              _run((repo) async {
+                await repo.breakEnd(_uuid(), breakId: st.currentBreakId, attendanceId: st.attendanceId);
+              });
+            },
             icon: const Icon(Icons.play_arrow),
             label: Text('Finalizar pausa (${st.currentBreakType ?? ''})'),
           ),
         const SizedBox(height: 10),
         FilledButton.icon(
           style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
-          onPressed: (_busy || st.isOnBreak) ? null : () => _run((repo) async {
-            final (lat, lng) = await _location();
-            await repo.checkOut(_uuid(), attendanceId: st.attendanceId, lat: lat, lng: lng);
-          }),
+          onPressed: (_busy || st.isOnBreak) ? null : () => _checkOut(st),
           icon: const Icon(Icons.logout),
           label: const Text('Fichar salida'),
         ),
         if (st.isOnBreak)
           const Padding(
             padding: EdgeInsets.only(top: 8),
-            child: Text('Finaliza la pausa antes de fichar salida.',
-                style: TextStyle(color: Colors.black54)),
+            child: Text('Finaliza la pausa antes de fichar salida.', style: TextStyle(color: Colors.black54)),
           ),
       ],
     );
@@ -129,8 +208,9 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> {
 }
 
 class _StatusCard extends StatelessWidget {
-  const _StatusCard({required this.state});
+  const _StatusCard({required this.state, required this.totals});
   final AttendanceState state;
+  final ({Duration bruta, Duration pausas, Duration efectivas}) totals;
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -151,16 +231,53 @@ class _StatusCard extends StatelessWidget {
             ]),
             if (state.hasOpen) ...[
               const Divider(height: 28),
-              _row('Entrada', state.checkIn?.toLocal().toString().substring(11, 16) ?? '—'),
-              _row('Horas trabajadas', state.workedHours.toStringAsFixed(2)),
-              _row('Pausas', state.totalBreakTime.toStringAsFixed(2)),
-              _row('Efectivas', state.effectiveWorkedHours.toStringAsFixed(2)),
+              _row('Entrada', state.checkIn != null ? _hm(state.checkIn!) : '—'),
+              _row('Jornada', _hms(totals.bruta)),
+              _row('Pausas', _hms(totals.pausas)),
+              _row('Efectivas', _hms(totals.efectivas)),
             ],
           ],
         ),
       ),
     );
   }
+
+  Widget _row(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(k, style: const TextStyle(color: Colors.black54)),
+          Text(v, style: const TextStyle(fontWeight: FontWeight.w600)),
+        ]),
+      );
+}
+
+class _SummaryCard extends StatelessWidget {
+  const _SummaryCard({required this.summary});
+  final _JourneySummary summary;
+  @override
+  Widget build(BuildContext context) => Card(
+        color: Colors.green.shade50,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.check_circle, color: Colors.green.shade700),
+                const SizedBox(width: 8),
+                Text('Última jornada',
+                    style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green.shade800)),
+              ]),
+              const Divider(height: 24),
+              _row('Entrada', _hm(summary.entrada)),
+              _row('Salida', _hm(summary.salida)),
+              _row('Jornada', _hms(summary.bruta)),
+              _row('Pausas', _hms(summary.pausas)),
+              _row('Efectivas', _hms(summary.efectivas)),
+            ],
+          ),
+        ),
+      );
 
   Widget _row(String k, String v) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 3),

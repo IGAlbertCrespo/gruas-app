@@ -1,3 +1,5 @@
+import '../../shared/odoo_dt.dart';
+
 /// Estado actual de asistencia (espejo de get_current_attendance_state).
 class AttendanceState {
   final bool hasOpen;
@@ -27,7 +29,7 @@ class AttendanceState {
     return AttendanceState(
       hasOpen: j['has_open_attendance'] == true,
       attendanceId: j['attendance_id'] is int ? j['attendance_id'] : null,
-      checkIn: DateTime.tryParse(j['check_in']?.toString() ?? ''),
+      checkIn: parseOdooDt(j['check_in']?.toString()),
       isOnBreak: j['is_on_break'] == true,
       currentBreakId: cb is Map ? cb['id'] as int? : null,
       currentBreakType: cb is Map ? cb['break_type_name']?.toString() : null,

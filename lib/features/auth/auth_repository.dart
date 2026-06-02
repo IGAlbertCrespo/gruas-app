@@ -53,8 +53,10 @@ class AuthRepository {
       'signature': signature,
     });
     final token = tokenRes['token']?.toString();
-    final expiresAt = DateTime.tryParse(tokenRes['expires_at']?.toString() ?? '') ??
-        DateTime.now().add(const Duration(hours: 1));
+    // La caducidad se calcula con expires_in (relativo) para no depender de la
+    // zona horaria del servidor; si no viene, se asume 1 hora.
+    final expiresInSec = (tokenRes['expires_in'] as num?)?.toInt() ?? 3600;
+    final expiresAt = DateTime.now().add(Duration(seconds: expiresInSec));
     if (token != null) await store.saveToken(token, expiresAt);
     return token;
   }

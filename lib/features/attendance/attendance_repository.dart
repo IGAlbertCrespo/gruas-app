@@ -3,6 +3,15 @@ import '../../core/network/api_exception.dart';
 import 'attendance_models.dart';
 import 'offline_queue.dart';
 
+String _two(int n) => n.toString().padLeft(2, '0');
+
+/// Fecha/hora actual en UTC con el formato que espera Odoo: 'YYYY-MM-DD HH:MM:SS'.
+String _odooNowUtc() {
+  final u = DateTime.now().toUtc();
+  return '${u.year.toString().padLeft(4, '0')}-${_two(u.month)}-${_two(u.day)} '
+      '${_two(u.hour)}:${_two(u.minute)}:${_two(u.second)}';
+}
+
 /// Asistencia. Online -> llama al endpoint; sin red -> encola con offline_uuid.
 class AttendanceRepository {
   AttendanceRepository(this.api, this.queue);
@@ -29,7 +38,7 @@ class AttendanceRepository {
   ) async {
     final payload = {
       'offline_uuid': offlineUuid,
-      'timestamp': DateTime.now().toUtc().toIso8601String(),
+      'timestamp': _odooNowUtc(),
       ...data,
     };
     try {
