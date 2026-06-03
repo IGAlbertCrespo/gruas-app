@@ -1,4 +1,4 @@
-name: Gruas 360º
+name: gruas_app
 description: APP móvil Grúas Salvador (conductores y jefes de tráfico).
 publish_to: "none"
 version: 1.0.0+1
@@ -42,7 +42,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets: ['assets/images/lsogo.png']
+  assets: ['assets/images/logo.png']
 
 # Icono del lanzador. Genera con: dart run flutter_launcher_icons
 flutter_launcher_icons:
