@@ -33,6 +33,9 @@ final tasksRepoProvider = Provider<TasksRepository>((ref) => TasksRepository(ref
 /// Filtro de listado: el jefe puede alternar mine/all.
 final taskScopeProvider = StateProvider<String>((ref) => 'mine');
 
+/// Filtro de la lista: 'pendientes' (no finalizada+firmada) o 'completadas'.
+final taskViewProvider = StateProvider<String>((ref) => 'pendientes');
+
 final tasksListProvider =
     FutureProvider.autoDispose<({int count, String scope, List<TaskSummary> tasks})>((ref) {
   final scope = ref.watch(taskScopeProvider);

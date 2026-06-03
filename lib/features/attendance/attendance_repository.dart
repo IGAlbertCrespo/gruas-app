@@ -6,8 +6,11 @@ import 'offline_queue.dart';
 String _two(int n) => n.toString().padLeft(2, '0');
 
 /// Fecha/hora actual en UTC con el formato que espera Odoo: 'YYYY-MM-DD HH:MM:SS'.
-String _odooNowUtc() {
-  final u = DateTime.now().toUtc();
+String _odooNowUtc() => _fmtUtc(DateTime.now());
+
+/// Formatea una fecha/hora concreta a UTC 'YYYY-MM-DD HH:MM:SS'.
+String _fmtUtc(DateTime d) {
+  final u = d.toUtc();
   return '${u.year.toString().padLeft(4, '0')}-${_two(u.month)}-${_two(u.day)} '
       '${_two(u.hour)}:${_two(u.minute)}:${_two(u.second)}';
 }
@@ -34,11 +37,12 @@ class AttendanceRepository {
     String path,
     String type,
     String offlineUuid,
-    Map<String, dynamic> data,
-  ) async {
+    Map<String, dynamic> data, {
+    String? timestamp,
+  }) async {
     final payload = {
       'offline_uuid': offlineUuid,
-      'timestamp': _odooNowUtc(),
+      'timestamp': timestamp ?? _odooNowUtc(),
       ...data,
     };
     try {
@@ -58,9 +62,12 @@ class AttendanceRepository {
     }
   }
 
-  Future<Map<String, dynamic>> checkIn(String uuid, {double? lat, double? lng}) =>
+  /// [at] permite abrir la jornada con una hora concreta (p.ej. la hora
+  /// informada de inicio de la tarea cuando se ficha automáticamente).
+  Future<Map<String, dynamic>> checkIn(String uuid, {double? lat, double? lng, DateTime? at}) =>
       _op('/attendance/check-in', 'check_in', uuid,
-          {if (lat != null) 'latitude': lat, if (lng != null) 'longitude': lng});
+          {if (lat != null) 'latitude': lat, if (lng != null) 'longitude': lng},
+          timestamp: at != null ? _fmtUtc(at) : null);
 
   Future<Map<String, dynamic>> checkOut(String uuid, {int? attendanceId, double? lat, double? lng}) =>
       _op('/attendance/check-out', 'check_out', uuid, {

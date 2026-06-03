@@ -1,7 +1,9 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/location.dart';
+import '../../auth/session_controller.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
 import 'signature_screen.dart';
@@ -121,77 +123,179 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   // ---------- Acciones ----------
   Widget? _actionsBar(TaskDetail t) {
     final alias = t.stage.alias;
-    final List<Widget> buttons = [];
+    final parts = <Widget>[];
 
-    if (alias == 'Informado' && !t.iniciada) {
-      buttons.add(Expanded(
-        child: FilledButton.icon(
-          onPressed: _busy ? null : () => _start(t),
-          icon: const Icon(Icons.play_arrow),
-          label: const Text('Iniciar'),
+    // ¿Hay OTRA tarea en marcha? (iniciada y sin finalizar, distinta de esta).
+    final lista = ref.read(tasksListProvider).valueOrNull;
+    final otraEnMarcha =
+        lista?.tasks.any((x) => x.id != t.id && x.iniciada && !x.cerrada) ?? false;
+
+    // No se pueden hacer dos tareas a la vez: avisamos en lugar de dejar iniciar.
+    if (alias == 'Informado' && !t.iniciada && otraEnMarcha) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.orange.shade50,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.orange.shade200),
+            ),
+            child: Row(children: [
+              Icon(Icons.info_outline, color: Colors.orange.shade800),
+              const SizedBox(width: 10),
+              Expanded(child: Text(
+                'Tienes una tarea en proceso. Finalízala antes de iniciar otra.',
+                style: TextStyle(color: Colors.orange.shade900))),
+            ]),
+          ),
         ),
+      );
+    }
+
+    // Botón de etapa: Iniciar / Finalizar / Reabrir (excluyentes).
+    if (alias == 'Informado' && !t.iniciada) {
+      parts.add(FilledButton.icon(
+        onPressed: _busy ? null : () => _start(t),
+        icon: const Icon(Icons.play_arrow),
+        label: const Text('Iniciar'),
       ));
     } else if (alias == 'Informado' && t.iniciada) {
-      buttons.add(Expanded(
-        child: OutlinedButton.icon(
-          onPressed: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => SignatureScreen(task: t))),
-          icon: const Icon(Icons.draw),
-          label: const Text('Firmar'),
-        ),
-      ));
-      buttons.add(const SizedBox(width: 8));
-      buttons.add(Expanded(
-        child: FilledButton.icon(
-          style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
-          onPressed: _busy ? null : () => _finish(t),
-          icon: const Icon(Icons.check_circle),
-          label: const Text('Finalizar'),
-        ),
+      parts.add(FilledButton.icon(
+        style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
+        onPressed: _busy ? null : () => _finish(t),
+        icon: const Icon(Icons.check_circle),
+        label: const Text('Finalizar'),
       ));
     } else if (alias == 'Finalizada') {
-      buttons.add(Expanded(
-        child: OutlinedButton.icon(
-          onPressed: _busy ? null : () => _reopen(t),
-          icon: const Icon(Icons.undo),
-          label: const Text('Reabrir'),
-        ),
+      parts.add(OutlinedButton.icon(
+        onPressed: _busy ? null : () => _reopen(t),
+        icon: const Icon(Icons.undo),
+        label: const Text('Reabrir'),
       ));
     }
 
-    if (buttons.isEmpty) return null;
+    // Firma: "Ver firma" siempre que esté firmada; "Firmar" solo si está iniciada
+    // (no tiene sentido firmar una tarea sin iniciar).
+    if (t.hasSignature) {
+      parts.add(OutlinedButton.icon(
+        onPressed: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => SignatureScreen(task: t))),
+        icon: const Icon(Icons.visibility),
+        label: const Text('Ver firma'),
+      ));
+    } else if (t.iniciada) {
+      parts.add(OutlinedButton.icon(
+        onPressed: () => Navigator.push(context,
+            MaterialPageRoute(builder: (_) => SignatureScreen(task: t))),
+        icon: const Icon(Icons.draw),
+        label: const Text('Firmar'),
+      ));
+    }
+
+    if (parts.isEmpty) return null;
+    final row = <Widget>[];
+    for (var i = 0; i < parts.length; i++) {
+      if (i > 0) row.add(const SizedBox(width: 8));
+      row.add(Expanded(child: parts[i]));
+    }
     return SafeArea(
-      child: Padding(padding: const EdgeInsets.all(12), child: Row(children: buttons)),
+      child: Padding(padding: const EdgeInsets.all(12), child: Row(children: row)),
     );
   }
-  /// Selector de fecha + hora (para inicio/cierre). Devuelve null si se cancela.
-  Future<DateTime?> _pickDateTime(DateTime initial) async {
-    final d = await showDatePicker(
+  /// Selector rápido de hora (UX para la calle): Ahora / Hace 30 min / Hace 1 h
+  /// / Otra hora… (esta abre el reloj, con la fecha de hoy por defecto).
+  Future<DateTime?> _pickTime() async {
+    final now = DateTime.now();
+    final choice = await showModalBottomSheet<String>(
       context: context,
-      initialDate: initial,
-      firstDate: DateTime(2020),
-      lastDate: DateTime(2100),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.schedule),
+              title: const Text('Ahora'),
+              onTap: () => Navigator.pop(context, 'now'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.history),
+              title: const Text('Hace 30 min'),
+              onTap: () => Navigator.pop(context, 'm30'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.history),
+              title: const Text('Hace 1 hora'),
+              onTap: () => Navigator.pop(context, 'h1'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.edit_calendar),
+              title: const Text('Otra hora…'),
+              onTap: () => Navigator.pop(context, 'custom'),
+            ),
+          ],
+        ),
+      ),
     );
-    if (d == null || !mounted) return null;
-    final tm = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(initial));
-    if (tm == null) return null;
-    return DateTime(d.year, d.month, d.day, tm.hour, tm.minute);
+    switch (choice) {
+      case 'now':
+        return DateTime.now();
+      case 'm30':
+        return DateTime.now().subtract(const Duration(minutes: 30));
+      case 'h1':
+        return DateTime.now().subtract(const Duration(hours: 1));
+      case 'custom':
+        return _pickCustom(now);
+      default:
+        return null;
+    }
+  }
+
+  /// Reloj directo con la fecha de hoy; si pulsa el icono de calendario puede
+  /// cambiar el día (caso raro).
+  Future<DateTime?> _pickCustom(DateTime base) async {
+    final tm = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(base));
+    if (tm == null || !mounted) return null;
+    return DateTime(base.year, base.month, base.day, tm.hour, tm.minute);
   }
 
   Future<void> _start(TaskDetail t) async {
     // La hora de inicio se puede ajustar (p.ej. si se olvidó iniciar a tiempo).
-    final hora = await _pickDateTime(DateTime.now());
+    final hora = await _pickTime();
     if (hora == null) return;
     setState(() => _busy = true);
     try {
       final (lat, lng) = await bestEffortLocation();
+
+      // No se puede trabajar sin jornada: si el empleado tiene control de
+      // presencia y no hay jornada abierta, se ficha entrada con la MISMA hora
+      // informada de inicio de la tarea. Si falla, NO se inicia la tarea.
+      final tieneAttendance =
+          ref.read(sessionControllerProvider).profile?.capabilities.attendance ?? false;
+      if (tieneAttendance) {
+        final estado = await ref.read(attendanceRepoProvider).currentState();
+        if (!estado.hasOpen) {
+          await ref.read(attendanceRepoProvider).checkIn(_uuid(), lat: lat, lng: lng, at: hora);
+          ref.invalidate(attendanceStateProvider);
+        }
+      }
+
       await ref.read(tasksRepoProvider).start(t.id, lat: lat, lng: lng, informada: hora);
       ref.invalidate(taskDetailProvider(t.id));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('No se pudo iniciar: $e')));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  String _uuid() {
+    final r = math.Random();
+    return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
   }
 
   Future<void> _reopen(TaskDetail t) async {
@@ -208,18 +312,22 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   Future<void> _finish(TaskDetail t) async {
-    // La hora de cierre es editable; las horas a facturar se calculan con las
-    // horas informadas (inicio informado -> cierre informado), por exceso a 30 min.
-    final cierre = await _pickDateTime(DateTime.now());
+    // 1) Hora de cierre (editable).
+    final cierre = await _pickTime();
     if (cierre == null) return;
 
+    // 2) Pausa/comida: obligatorio informarla (aunque sea "Ninguna").
+    final pausa = await _pickPausa();
+    if (pausa == null) return; // canceló: no finaliza
+
+    // 3) Cálculo: horas (ceil 30) menos pausa; el mínimo se evalúa tras el descuento.
     final apertura = t.aperturaInformada ?? t.aperturaHora;
     double horas = 0;
     if (apertura != null) {
       final h = cierre.difference(apertura).inMinutes / 60.0;
       horas = (h * 2).ceil() / 2.0;
-      if (horas < 0) horas = 0;
     }
+    horas = (horas - pausa).clamp(0, double.infinity).toDouble();
     final esMinimo = t.worksheet.servicioMinimo > 0 && horas < t.worksheet.servicioMinimo;
 
     final ok = await _confirmFinish(horas, esMinimo);
@@ -228,15 +336,42 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     setState(() => _busy = true);
     try {
       final (lat, lng) = await bestEffortLocation();
-      await ref.read(tasksRepoProvider).finish(t.id, lat: lat, lng: lng, informada: cierre);
+      await ref.read(tasksRepoProvider).finish(t.id, lat: lat, lng: lng, informada: cierre, pausa: pausa);
       ref.invalidate(taskDetailProvider(t.id));
       ref.invalidate(tasksListProvider);
-      if (mounted) Navigator.pop(context);
+      // Nos quedamos en el detalle (ya finalizada); no volvemos a la lista.
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Pausa/comida del servicio (obligatorio elegir). Devuelve null si cancela.
+  Future<double?> _pickPausa() {
+    return showDialog<double>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => SimpleDialog(
+        title: const Text('Tiempo de pausa / comida'),
+        children: [
+          for (final opt in const [
+            ('Ninguna', 0.0),
+            ('30 min', 0.5),
+            ('1 hora', 1.0),
+            ('1 h 30 min', 1.5),
+            ('2 horas', 2.0),
+          ])
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, opt.$2),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(opt.$1, style: const TextStyle(fontSize: 16)),
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   Future<bool?> _confirmFinish(double horas, bool esMinimo) {
@@ -278,8 +413,6 @@ class _Body extends StatelessWidget {
             _StageChip(alias: task.stage.alias, name: task.stage.name),
           ],
         ),
-        if (task.partner != null)
-          Padding(padding: const EdgeInsets.only(top: 4), child: Text(task.partner!)),
         const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 4, children: [
           if (task.recargo != null)
@@ -296,6 +429,8 @@ class _Body extends StatelessWidget {
             _kv('Fecha/Hora', task.fechaServicio!.toLocal().toString().substring(0, 16)),
           if (task.vehicle != null) _kv('Vehículo', task.vehicle!),
           if (task.albaran != null) _kv('Albarán', task.albaran!),
+          if (task.horaSalida != null)
+            _kv('Salida', task.horaSalida!.toLocal().toString().substring(0, 16)),
           if (task.aperturaHora != null)
             _kv('Inicio', task.aperturaHora!.toLocal().toString().substring(0, 16)),
           if (task.cierreHora != null)
@@ -312,6 +447,8 @@ class _Body extends StatelessWidget {
 
         _Section(icon: Icons.assignment_turned_in, title: 'Hoja de trabajo', color: scheme.primary, rows: [
           _kv('Horas reales', task.worksheet.horasReales.toStringAsFixed(2)),
+          if (task.worksheet.pausaServicio > 0)
+            _kv('Pausa', '${task.worksheet.pausaServicio.toStringAsFixed(1)} h'),
           if (task.worksheet.aplicarMinimo)
             _kv('Facturación', 'Servicio mínimo')
           else

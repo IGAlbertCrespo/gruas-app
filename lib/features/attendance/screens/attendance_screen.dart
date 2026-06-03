@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../tasks/tasks_providers.dart';
 import '../attendance_models.dart';
 import '../attendance_repository.dart';
+import '../../../shared/widgets/brand_logo.dart';
 
 /// Resumen de la última jornada cerrada (se muestra hasta el siguiente fichaje).
 class _JourneySummary {
@@ -28,6 +29,11 @@ String _hms(Duration d) {
 String _hm(DateTime dt) {
   final l = dt.toLocal();
   return '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
+}
+
+String _dmy(DateTime dt) {
+  final l = dt.toLocal();
+  return '${l.day.toString().padLeft(2, '0')}/${l.month.toString().padLeft(2, '0')}/${(l.year % 100).toString().padLeft(2, '0')}';
 }
 
 class AttendanceScreen extends ConsumerStatefulWidget {
@@ -138,26 +144,40 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
   @override
   Widget build(BuildContext context) {
     final stateAsync = ref.watch(attendanceStateProvider);
-    return RefreshIndicator(
-      onRefresh: () async {
-        ref.invalidate(attendanceStateProvider);
-      },
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          stateAsync.when(
-            loading: () => const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator())),
-            error: (e, _) => _ErrorCard(message: '$e', onRetry: () => ref.invalidate(attendanceStateProvider)),
-            data: (st) => _StatusCard(state: st, totals: _compute(st)),
+    return Stack(
+      children: [
+        // Marca de agua tenue de fondo (no intercepta toques).
+        Positioned.fill(
+          child: IgnorePointer(
+            child: Center(child: BrandLogo(size: 260, opacity: 0.06)),
           ),
-          if (_lastSummary != null) ...[
-            const SizedBox(height: 8),
-            _SummaryCard(summary: _lastSummary!),
-          ],
-          const SizedBox(height: 8),
-          stateAsync.maybeWhen(data: (st) => _actions(st), orElse: () => const SizedBox.shrink()),
-        ],
-      ),
+        ),
+        RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(attendanceStateProvider);
+          },
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              stateAsync.when(
+                loading: () => const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator())),
+                error: (e, _) => _ErrorCard(message: '$e', onRetry: () => ref.invalidate(attendanceStateProvider)),
+                data: (st) => _StatusCard(state: st, totals: _compute(st)),
+              ),
+              if (_lastSummary != null) ...[
+                const SizedBox(height: 8),
+                _SummaryCard(summary: _lastSummary!),
+              ],
+              const SizedBox(height: 8),
+              stateAsync.maybeWhen(data: (st) => _actions(st), orElse: () => const SizedBox.shrink()),
+              // Logo nítido bajo el detalle.
+              const SizedBox(height: 32),
+              const Center(child: BrandLogo(size: 72)),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -265,7 +285,7 @@ class _SummaryCard extends StatelessWidget {
               Row(children: [
                 Icon(Icons.check_circle, color: Colors.green.shade700),
                 const SizedBox(width: 8),
-                Text('Última jornada',
+                Text('Última jornada  (${_dmy(summary.entrada)})',
                     style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green.shade800)),
               ]),
               const Divider(height: 24),

@@ -21,6 +21,8 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
   final _controller = SignatureController(penStrokeWidth: 3, penColor: Colors.black);
   late final TextEditingController _signer =
       TextEditingController(text: widget.task.worksheet.identificacionSig ?? '');
+  late final TextEditingController _dni =
+      TextEditingController(text: widget.task.worksheet.dniSig ?? '');
   late final TextEditingController _obs =
       TextEditingController(text: widget.task.worksheet.obsCliente ?? '');
   bool _busy = false;
@@ -29,9 +31,18 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
   void dispose() {
     _controller.dispose();
     _signer.dispose();
+    _dni.dispose();
     _obs.dispose();
     super.dispose();
   }
+
+  Widget _kv(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(width: 110, child: Text(k, style: const TextStyle(color: Colors.black54))),
+          Expanded(child: Text(v)),
+        ]),
+      );
 
   Future<void> _save() async {
     if (_controller.isEmpty) {
@@ -62,6 +73,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
             widget.task.id,
             base64Encode(bytes),
             signerName: _signer.text.trim().isEmpty ? null : _signer.text.trim(),
+            dni: _dni.text.trim(),
             obsCliente: _obs.text.trim(),
             lat: lat,
             lng: lng,
@@ -78,18 +90,48 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
   @override
   Widget build(BuildContext context) {
     if (widget.task.hasSignature) {
+      final w = widget.task.worksheet;
+      Widget? img;
+      final b64 = w.signatureBase64;
+      if (b64 != null && b64.isNotEmpty) {
+        try {
+          img = Image.memory(base64Decode(b64), height: 160, fit: BoxFit.contain);
+        } catch (_) {
+          img = null;
+        }
+      }
       return Scaffold(
         appBar: AppBar(title: const Text('Firma del cliente')),
-        body: const Center(
-          child: Padding(
-            padding: EdgeInsets.all(32),
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Icon(Icons.verified, size: 64, color: Colors.green),
-              SizedBox(height: 16),
-              Text('Esta tarea ya está firmada.\nNo puede modificarse.',
-                  textAlign: TextAlign.center, style: TextStyle(fontSize: 16)),
+        body: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            Row(children: [
+              Icon(Icons.verified, color: Colors.green.shade700),
+              const SizedBox(width: 8),
+              const Text('Tarea firmada', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ]),
-          ),
+            const SizedBox(height: 16),
+            if ((w.identificacionSig ?? '').isNotEmpty) _kv('Firmante', w.identificacionSig!),
+            if ((w.dniSig ?? '').isNotEmpty) _kv('DNI', w.dniSig!),
+            if (w.firmaHora != null)
+              _kv('Fecha/Hora', w.firmaHora!.toLocal().toString().substring(0, 16)),
+            if ((w.obsCliente ?? '').isNotEmpty) _kv('Obs. cliente', w.obsCliente!),
+            const SizedBox(height: 16),
+            const Text('Firma:', style: TextStyle(color: Colors.black54)),
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                border: Border.all(color: Colors.black26),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: img ?? const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: Text('Firma no disponible para mostrar.')),
+              ),
+            ),
+          ],
         ),
       );
     }
@@ -113,6 +155,12 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           TextField(
             controller: _signer,
             decoration: const InputDecoration(labelText: 'Nombre de quien firma'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _dni,
+            textCapitalization: TextCapitalization.characters,
+            decoration: const InputDecoration(labelText: 'DNI de quien firma'),
           ),
           const SizedBox(height: 12),
           const Text('Firma:', style: TextStyle(color: Colors.black54)),
@@ -146,7 +194,8 @@ class _HoursBanner extends StatelessWidget {
   final TaskDetail task;
   @override
   Widget build(BuildContext context) {
-    final (IconData icon, Color color, String text) = !task.cerrada
+    final finalizada = task.cerrada || task.stage.alias == 'Finalizada';
+    final (IconData icon, Color color, String text) = !finalizada
         ? (Icons.hourglass_empty, Colors.orange.shade800,
             'El cómputo de horas aún no está calculado (tarea sin finalizar).')
         : task.worksheet.aplicarMinimo

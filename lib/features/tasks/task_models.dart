@@ -79,35 +79,42 @@ class Address {
 }
 
 class Worksheet {
-  final String? obsAlbaran, obsCliente, identificacionSig;
+  final String? obsAlbaran, obsCliente, identificacionSig, dniSig;
   final bool aplicarMinimo, hasSignature;
   final int servicioMinimo;
-  final double horasReales, horasFacturar;
+  final double horasReales, horasFacturar, pausaServicio;
   final double? cantidadPedida;
   final DateTime? firmaHora;
+  final String? signatureBase64;
   const Worksheet({
     this.obsAlbaran,
     this.obsCliente,
     this.identificacionSig,
+    this.dniSig,
     this.aplicarMinimo = false,
     this.hasSignature = false,
     this.servicioMinimo = 0,
     this.horasReales = 0,
     this.horasFacturar = 0,
+    this.pausaServicio = 0,
     this.cantidadPedida,
     this.firmaHora,
+    this.signatureBase64,
   });
   factory Worksheet.fromJson(Map<String, dynamic> j) => Worksheet(
         obsAlbaran: j['obs_albaran']?.toString(),
         obsCliente: j['obs_cliente']?.toString(),
         identificacionSig: j['identificacion_sig']?.toString(),
+        dniSig: j['dni_sig']?.toString(),
         aplicarMinimo: j['aplicar_minimo'] == true,
         hasSignature: j['has_signature'] == true,
         servicioMinimo: ((j['servicio_minimo'] ?? 0) as num).round(),
         horasReales: (j['horas_reales'] ?? 0).toDouble(),
         horasFacturar: (j['horas_facturar'] ?? 0).toDouble(),
+        pausaServicio: (j['pausa_servicio'] ?? 0).toDouble(),
         cantidadPedida: j['cantidad_pedida'] == null ? null : (j['cantidad_pedida']).toDouble(),
         firmaHora: parseOdooDt(j['firma_hora']?.toString()),
+        signatureBase64: j['signature']?.toString(),
       );
 }
 

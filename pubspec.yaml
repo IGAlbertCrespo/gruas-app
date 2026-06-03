@@ -1,4 +1,4 @@
-name: gruas_app
+name: Gruas 360º
 description: APP móvil Grúas Salvador (conductores y jefes de tráfico).
 publish_to: "none"
 version: 1.0.0+1
@@ -33,8 +33,22 @@ dependencies:
   intl: ^0.19.0
   collection: ^1.18.0
 
+  # Versión/build de la app (se muestra en splash y en "Acerca de")
+  package_info_plus: ^9.0.0
+
 dev_dependencies:
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
+  assets: ['assets/images/lsogo.png']
+
+# Icono del lanzador. Genera con: dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true                     # sustituye el ic_launcher por defecto
+  ios: true                         # genera también el set de iOS (lo usarás luego)
+  image_path: "assets/icon/app_icon.png"
+  min_sdk_android: 21
+  remove_alpha_ios: true            # iOS NO admite canal alfa en el icono
+  background_color_ios: "#FFFFFF"   # relleno al quitar alfa; ponlo del color de fondo de tu icono

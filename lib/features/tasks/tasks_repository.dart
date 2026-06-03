@@ -45,11 +45,12 @@ class TasksRepository {
 
   /// Finaliza la tarea. `informada` es la hora de cierre declarada (editable);
   /// las horas a facturar se calculan en el servidor con las horas informadas.
-  Future<TaskDetail> finish(int id, {double? lat, double? lng, DateTime? informada}) async {
+  Future<TaskDetail> finish(int id, {double? lat, double? lng, DateTime? informada, double? pausa}) async {
     final res = await api.postJson('/tasks/$id/finish', data: {
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
       if (informada != null) 'informada': _fmtUtc(informada),
+      if (pausa != null) 'pausa': pausa,
     });
     return TaskDetail.fromJson(res);
   }
@@ -65,10 +66,11 @@ class TasksRepository {
 
   /// Firma del cliente: imagen + nombre + observaciones del cliente + GPS.
   Future<void> saveSignature(int id, String signatureBase64,
-      {String? signerName, String? obsCliente, double? lat, double? lng}) async {
+      {String? signerName, String? dni, String? obsCliente, double? lat, double? lng}) async {
     await api.postJson('/tasks/$id/signature', data: {
       'signature': signatureBase64,
       if (signerName != null) 'signer_name': signerName,
+      if (dni != null) 'dni': dni,
       if (obsCliente != null) 'obs_cliente': obsCliente,
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,

@@ -13,14 +13,27 @@ class TasksListScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final isManager = ref.watch(sessionControllerProvider).profile?.isManager ?? false;
     final scope = ref.watch(taskScopeProvider);
+    final view = ref.watch(taskViewProvider);
     final listAsync = ref.watch(tasksListProvider);
 
     return Column(
       children: [
+        // Pendientes (no finalizada+firmada) vs Completadas (finalizada y firmada).
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+          child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'pendientes', label: Text('Pendientes')),
+              ButtonSegment(value: 'completadas', label: Text('Completadas')),
+            ],
+            selected: {view},
+            onSelectionChanged: (s) => ref.read(taskViewProvider.notifier).state = s.first,
+          ),
+        ),
         // El jefe puede alternar entre sus tareas y todas (solo lectura en "todas").
         if (isManager)
           Padding(
-            padding: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: SegmentedButton<String>(
               segments: const [
                 ButtonSegment(value: 'mine', label: Text('Mías')),
@@ -38,18 +51,30 @@ class TasksListScreen extends ConsumerWidget {
               error: (e, _) => ListView(children: [
                 Padding(padding: const EdgeInsets.all(24), child: Center(child: Text('$e'))),
               ]),
-              data: (res) => res.tasks.isEmpty
-                  ? ListView(children: const [
-                      Padding(padding: EdgeInsets.all(40), child: Center(child: Text('No hay tareas.'))),
-                    ])
-                  : ListView.builder(
-                      padding: const EdgeInsets.all(12),
-                      itemCount: res.tasks.length,
-                      itemBuilder: (_, i) => _TaskCard(
-                        task: res.tasks[i],
-                        readOnly: scope == 'all' && isManager,
-                      ),
+              data: (res) {
+                // Opción A: completada = cerrada Y firmada.
+                final tasks = res.tasks.where((t) {
+                  final completada = t.cerrada && t.hasSignature;
+                  return view == 'completadas' ? completada : !completada;
+                }).toList();
+                if (tasks.isEmpty) {
+                  return ListView(children: [
+                    Padding(
+                      padding: const EdgeInsets.all(40),
+                      child: Center(child: Text(
+                        view == 'completadas' ? 'No hay tareas completadas.' : 'No hay tareas pendientes.')),
                     ),
+                  ]);
+                }
+                return ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: tasks.length,
+                  itemBuilder: (_, i) => _TaskCard(
+                    task: tasks[i],
+                    readOnly: scope == 'all' && isManager,
+                  ),
+                );
+              },
             ),
           ),
         ),
@@ -66,7 +91,10 @@ class _TaskCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final route = [task.cargaPoblacion, task.descargaPoblacion].where((e) => e != null && e.isNotEmpty);
+    final enProceso = task.iniciada && !task.cerrada;
+    final pteFirma = task.cerrada && !task.hasSignature;
     return Card(
+      color: enProceso ? Colors.green.shade50 : null,
       child: ListTile(
         onTap: () => Navigator.push(
           context,
@@ -76,11 +104,27 @@ class _TaskCard extends StatelessWidget {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (task.partner != null) Text(task.partner!),
+            if (enProceso)
+              const _StatusBadge(text: 'EN PROCESO', color: Colors.green, icon: Icons.play_circle)
+            else if (pteFirma)
+              const _StatusBadge(text: 'PTE. FIRMA', color: Colors.red, icon: Icons.draw),
+            if (task.horaSalida != null)
+              Text('Salida: ${task.horaSalida!.toLocal().toString().substring(0, 16)}',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
             if (route.isNotEmpty) Text(route.join('  →  '), style: const TextStyle(color: Colors.black54)),
             if (task.fechaServicio != null)
               Text(task.fechaServicio!.toLocal().toString().substring(0, 16),
                   style: const TextStyle(fontSize: 12, color: Colors.black45)),
+            if (task.recargo != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.bolt, size: 14, color: Colors.deepPurple.shade400),
+                  const SizedBox(width: 2),
+                  Text(task.recargo!,
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.deepPurple.shade400)),
+                ]),
+              ),
           ],
         ),
         trailing: Column(
@@ -97,4 +141,29 @@ class _TaskCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Distintivo de estado en la tarjeta: EN PROCESO (verde) / PTE. FIRMA (rojo).
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({required this.text, required this.color, required this.icon});
+  final String text;
+  final MaterialColor color;
+  final IconData icon;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 4),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: color.shade100,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(icon, size: 14, color: color.shade800),
+            const SizedBox(width: 4),
+            Text(text,
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color.shade800)),
+          ]),
+        ),
+      );
 }

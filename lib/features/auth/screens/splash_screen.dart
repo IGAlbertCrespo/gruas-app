@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/env/environment.dart';
 import '../../../core/providers.dart';
+import '../../../shared/app_version.dart';
+import '../../../shared/widgets/brand_logo.dart';
 
 /// Nombre comercial de la app (marca). Cámbialo aquí si quieres otro.
-const String kAppCommercialName = 'Gru@s 360';
+const String kAppCommercialName = 'APP Gru@s';
 
 class SplashScreen extends ConsumerWidget {
   const SplashScreen({super.key});
@@ -33,15 +35,7 @@ class SplashScreen extends ConsumerWidget {
               //          - assets/images/logo.png
               //   3) sustituye este Container por:
               //        Image.asset('assets/images/logo.png', height: 96)
-              Container(
-                width: 96,
-                height: 96,
-                decoration: BoxDecoration(
-                  color: scheme.primary,
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child: const Icon(Icons.local_shipping, size: 54, color: Colors.white),
-              ),
+              const BrandLogo(size: 96),
               const SizedBox(height: 20),
 
               // ---- NOMBRE COMERCIAL ----
@@ -76,7 +70,16 @@ class SplashScreen extends ConsumerWidget {
 
               const Spacer(),
               const CircularProgressIndicator(),
-              const SizedBox(height: 40),
+              const SizedBox(height: 16),
+
+              // ---- VERSIÓN (pie) ----
+              // Se lee del binario (pubspec version+build) vía appVersionProvider.
+              // Mientras carga (muy breve) no muestra nada, no parpadea.
+              Text(
+                ref.watch(appVersionProvider).valueOrNull?.short ?? '',
+                style: const TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+              const SizedBox(height: 24),
             ],
           ),
         ),

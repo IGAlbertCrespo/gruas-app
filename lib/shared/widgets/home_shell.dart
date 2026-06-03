@@ -2,8 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../features/auth/session_controller.dart';
+import '../../features/auth/screens/splash_screen.dart' show kAppCommercialName;
 import '../../features/attendance/screens/attendance_screen.dart';
 import '../../features/tasks/screens/tasks_list_screen.dart';
+import '../../core/env/environment.dart';
+import '../../core/providers.dart';
+import '../app_version.dart';
+import 'brand_logo.dart';
 import 'env_banner.dart';
 
 /// Contenedor principal tras autenticarse: navegación entre Asistencia y Tareas.
@@ -44,6 +49,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
               child: Chip(label: Text('Jefe'), visualDensity: VisualDensity.compact),
             ),
           IconButton(
+            icon: const Icon(Icons.info_outline),
+            tooltip: 'Acerca de',
+            onPressed: () => _showAbout(context),
+          ),
+          IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Cerrar sesión / re-emparejar',
             onPressed: () => _confirmReset(context),
@@ -67,6 +77,63 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             ),
     );
   }
+
+  /// Diálogo "Acerca de": marca, empresa, entorno, URL del servidor y versión.
+  /// Muestra la URL (baseUrl) pero NUNCA la BD, coherente con el resto de la app.
+  void _showAbout(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => Consumer(
+        builder: (ctx, ref, _) {
+          final profile = ref.watch(connectionProfileProvider);
+          final version = ref.watch(appVersionProvider).valueOrNull?.short ?? '—';
+          final empresa = profile?.label;
+          final url = profile?.baseUrl;
+
+          return AlertDialog(
+            title: const Text('Acerca de'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(child: const BrandLogo(size: 56)),
+                const SizedBox(height: 12),
+                Center(
+                  child: Text(
+                    kAppCommercialName,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (empresa != null && empresa.trim().isNotEmpty)
+                  _aboutRow('Empresa', empresa),
+                _aboutRow('Entorno', Env.config.label),
+                if (url != null && url.trim().isNotEmpty) _aboutRow('Servidor', url),
+                _aboutRow('Versión', version),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar')),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _aboutRow(String label, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 76,
+              child: Text(label, style: const TextStyle(color: Colors.black54, fontSize: 13)),
+            ),
+            Expanded(child: Text(value, style: const TextStyle(fontSize: 13))),
+          ],
+        ),
+      );
 
   void _confirmReset(BuildContext context) {
     showDialog(
