@@ -30,9 +30,8 @@ class TasksRepository {
 
   Future<TaskDetail> detail(int id) async {
     final res = await api.getJson('/tasks/$id');
-     // ignore: avoid_print
-    final res = await api.getJson('/tasks/$id');
     // ignore: avoid_print
+
     print('ASOC=${res['servicios_asociados']}');
     print('ACCES=${res['accesorios']}');
 
