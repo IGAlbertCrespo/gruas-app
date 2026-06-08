@@ -30,7 +30,7 @@ class AuthInterceptor extends QueuedInterceptor {
       if (token != null) {
         options.headers['Authorization'] = 'Bearer $token';
         // ignore: avoid_print
-        print('APP_TOKEN=$token');   // <-- TEMPORAL, quitar después de probar
+        //print('APP_TOKEN=$token');   // <-- TEMPORAL, quitar después de probar
       }
     }
     handler.next(options);

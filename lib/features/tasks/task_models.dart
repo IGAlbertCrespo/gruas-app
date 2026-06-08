@@ -117,11 +117,47 @@ class Worksheet {
         signatureBase64: j['signature']?.toString(),
       );
 }
+class ServicioAsociado {
+  final int id;
+  final String recurso;
+  final String naturaleza;   // operable
+  final bool esMio;
+  final String estadoTimer;  // sin_iniciar | corriendo | cerrado
 
+  const ServicioAsociado({
+    required this.id,
+    required this.recurso,
+    required this.naturaleza,
+    required this.esMio,
+    required this.estadoTimer,
+  });
+
+  factory ServicioAsociado.fromJson(Map<String, dynamic> j) => ServicioAsociado(
+        id: (j['id'] as num).toInt(),
+        recurso: j['recurso']?.toString() ?? '',
+        naturaleza: j['naturaleza']?.toString() ?? 'operable',
+        esMio: j['es_mio'] == true,
+        estadoTimer: j['estado_timer']?.toString() ?? 'sin_iniciar',
+      );
+}
+
+class Accesorio {
+  final String recurso;
+  final num cantidad;
+
+  const Accesorio({required this.recurso, required this.cantidad});
+
+  factory Accesorio.fromJson(Map<String, dynamic> j) => Accesorio(
+        recurso: j['recurso']?.toString() ?? '',
+        cantidad: (j['cantidad'] as num?) ?? 0,
+      );
+}
 class TaskDetail extends TaskSummary {
   final Address carga;
   final Address descarga;
   final Worksheet worksheet;
+  final List<ServicioAsociado> serviciosAsociados;
+  final List<Accesorio> accesorios;
   final DateTime? aperturaHora;
   final DateTime? aperturaInformada;
   final DateTime? cierreHora;
@@ -173,6 +209,12 @@ class TaskDetail extends TaskSummary {
       carga: Address.fromJson((j['carga'] ?? {}) as Map<String, dynamic>),
       descarga: Address.fromJson((j['descarga'] ?? {}) as Map<String, dynamic>),
       worksheet: Worksheet.fromJson((j['worksheet'] ?? {}) as Map<String, dynamic>),
+      serviciosAsociados: ((j['servicios_asociados'] ?? []) as List)
+          .map((e) => ServicioAsociado.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      accesorios: ((j['accesorios'] ?? []) as List)
+          .map((e) => Accesorio.fromJson(e as Map<String, dynamic>))
+          .toList(),
       aperturaHora: parseOdooDt(apertura['hora_sistema']?.toString()),
       aperturaInformada: parseOdooDt(apertura['hora_informada']?.toString()),
       cierreHora: parseOdooDt(cierre['hora_sistema']?.toString()),

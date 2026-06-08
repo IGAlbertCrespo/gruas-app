@@ -445,6 +445,18 @@ class _Body extends StatelessWidget {
             Text(task.descripcionServicio!.trim()),
           ]),
 
+        if (task.serviciosAsociados.isNotEmpty)
+          _Section(icon: Icons.account_tree, title: 'Otros servicios asociados',
+              color: scheme.primary, rows: [
+            for (final a in task.serviciosAsociados) _AsociadoTile(a: a),
+          ]),
+
+        if (task.accesorios.isNotEmpty)
+          _Section(icon: Icons.handyman, title: 'Accesorios a cargar',
+              color: scheme.primary, rows: [
+            for (final acc in task.accesorios) _AccesorioTile(acc: acc),
+          ]),
+
         _Section(icon: Icons.assignment_turned_in, title: 'Hoja de trabajo', color: scheme.primary, rows: [
           _kv('Horas reales', task.worksheet.horasReales.toStringAsFixed(2)),
           if (task.worksheet.pausaServicio > 0)
@@ -509,6 +521,58 @@ class _AddressCard extends StatelessWidget {
       if ((a.telefono ?? '').isNotEmpty) _kv('Teléfono', a.telefono!),
     ]);
   }
+}
+class _AsociadoTile extends StatelessWidget {
+  const _AsociadoTile({required this.a});
+  final ServicioAsociado a;
+
+  String _estado() {
+    if (a.estadoTimer == 'corriendo') return 'En proceso';
+    if (a.estadoTimer == 'cerrado') return 'Cerrada';
+    return '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Verde = lo operas tú (pulsable); negro = otro operario (solo informativo).
+    final color = a.esMio ? Colors.green.shade700 : Colors.black87;
+    final estado = _estado();
+    final row = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        Icon(a.esMio ? Icons.person : Icons.person_outline, size: 18, color: color),
+        const SizedBox(width: 8),
+        Expanded(child: Text(a.recurso,
+            style: TextStyle(color: color, fontWeight: FontWeight.w500))),
+        if (estado.isNotEmpty)
+          Text(estado, style: const TextStyle(color: Colors.black54, fontSize: 12)),
+        if (a.esMio) const Icon(Icons.chevron_right, size: 18, color: Colors.green),
+      ]),
+    );
+    if (!a.esMio) return row; // negro: no navegable
+    return InkWell(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => TaskDetailScreen(taskId: a.id, readOnly: false)),
+      ),
+      child: row,
+    );
+  }
+}
+
+class _AccesorioTile extends StatelessWidget {
+  const _AccesorioTile({required this.acc});
+  final Accesorio acc;
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(children: [
+          const Icon(Icons.handyman, size: 18, color: Colors.brown),
+          const SizedBox(width: 8),
+          Expanded(child: Text(acc.recurso)),
+          Text('×${acc.cantidad}', style: const TextStyle(color: Colors.black54)),
+        ]),
+      );
 }
 
 class _StageChip extends StatelessWidget {
