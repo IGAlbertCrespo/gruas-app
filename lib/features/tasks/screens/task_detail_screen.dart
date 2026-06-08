@@ -436,15 +436,6 @@ class _Body extends StatelessWidget {
           if (task.cierreHora != null)
             _kv('Cierre', task.cierreHora!.toLocal().toString().substring(0, 16)),
         ]),
-
-        _AddressCard(title: 'Carga', icon: Icons.upload, color: Colors.orange.shade800, a: task.carga),
-        _AddressCard(title: 'Descarga', icon: Icons.download, color: Colors.teal.shade700, a: task.descarga),
-
-        if ((task.descripcionServicio ?? '').trim().isNotEmpty)
-          _Section(icon: Icons.notes, title: 'Observaciones del Servicio', color: scheme.primary, rows: [
-            Text(task.descripcionServicio!.trim()),
-          ]),
-
         if (task.serviciosAsociados.isNotEmpty)
           _Section(icon: Icons.account_tree, title: 'Otros servicios asociados',
               color: scheme.primary, rows: [
@@ -455,6 +446,13 @@ class _Body extends StatelessWidget {
           _Section(icon: Icons.handyman, title: 'Accesorios a cargar',
               color: scheme.primary, rows: [
             for (final acc in task.accesorios) _AccesorioTile(acc: acc),
+          ]),
+        _AddressCard(title: 'Carga', icon: Icons.upload, color: Colors.orange.shade800, a: task.carga),
+        _AddressCard(title: 'Descarga', icon: Icons.download, color: Colors.teal.shade700, a: task.descarga),
+
+        if ((task.descripcionServicio ?? '').trim().isNotEmpty)
+          _Section(icon: Icons.notes, title: 'Observaciones del Servicio', color: scheme.primary, rows: [
+            Text(task.descripcionServicio!.trim()),
           ]),
 
         _Section(icon: Icons.assignment_turned_in, title: 'Hoja de trabajo', color: scheme.primary, rows: [
