@@ -65,6 +65,8 @@ class AuthRepository {
 
   Future<OperatorProfile> me() async {
     final res = await api.getJson('/me');
+    // ignore: avoid_print
+    print('ME_RAW=$res');
     return OperatorProfile.fromJson(res);
   }
 }

@@ -94,6 +94,8 @@ class MainActivity : FlutterActivity() {
         signer.update(payloadUtf8.toByteArray(Charsets.UTF_8))
         return Base64.encodeToString(signer.sign(), Base64.NO_WRAP)
     }
+    private fun getHardwareId(): String =
+    Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: ""
 
     private fun hasKey(alias: String): Boolean = keyStore().containsAlias(alias)
 
