@@ -27,7 +27,11 @@ class AuthInterceptor extends QueuedInterceptor {
     final isPublic = options.path.contains('/auth/') || options.path.endsWith('/enroll');
     if (!isPublic) {
       final token = await getToken();
-      if (token != null) options.headers['Authorization'] = 'Bearer $token';
+      if (token != null) {
+        options.headers['Authorization'] = 'Bearer $token';
+        // ignore: avoid_print
+        print('APP_TOKEN=$token');   // <-- TEMPORAL, quitar después de probar
+      }
     }
     handler.next(options);
   }

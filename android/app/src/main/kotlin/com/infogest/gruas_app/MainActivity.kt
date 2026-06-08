@@ -11,6 +11,7 @@ import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
+import android.provider.Settings
 
 /**
  * Canal nativo de identidad criptográfica del dispositivo.
@@ -48,6 +49,8 @@ class MainActivity : FlutterActivity() {
                             deleteKey(call.argument<String>("alias")!!)
                             result.success(null)
                         }
+                        "getHardwareId" ->
+                            result.success(getHardwareId())
                         else -> result.notImplemented()
                     }
                 } catch (e: Exception) {

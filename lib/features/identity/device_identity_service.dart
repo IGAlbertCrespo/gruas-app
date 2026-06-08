@@ -22,6 +22,9 @@ abstract class DeviceIdentityService {
 
   /// Borra el par de claves (re-emparejamiento / baja del dispositivo).
   Future<void> deleteKey({String alias});
+
+  /// Identificador estable del dispositivo (sobrevive a reinstalaciones).
+  Future<String> getHardwareId();
 }
 
 /// Alias por defecto. Con flavors distintos (staging/prod) el alias difiere,

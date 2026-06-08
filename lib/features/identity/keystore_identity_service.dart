@@ -11,6 +11,11 @@ import 'device_identity_service.dart';
 class KeystoreIdentityService implements DeviceIdentityService {
   static const MethodChannel _channel =
       MethodChannel('com.infogest.gruas_app/crypto');
+  @override
+  Future<String> getHardwareId() async {
+    final r = await _channel.invokeMethod<String>('getHardwareId');
+    return r ?? '';
+  }
 
   @override
   Future<bool> hasKey({String alias = kDefaultKeyAlias}) async {

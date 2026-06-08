@@ -25,8 +25,10 @@ class AuthRepository {
   /// Alta del dispositivo. Devuelve el estado (normalmente 'pending').
   Future<EnrollmentState> enroll({String? name, String? platform}) async {
     final publicKey = await identity.getOrCreatePublicKey();
+    final hardwareId = await identity.getHardwareId();
     final res = await authApi.postJson('/enroll', data: {
       'public_key': publicKey,
+      'hardware_id': hardwareId,
       if (name != null) 'name': name,
       if (platform != null) 'platform': platform,
     });
