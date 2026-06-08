@@ -187,6 +187,8 @@ class TaskDetail extends TaskSummary {
     this.cierreInformada,
     this.notasChofer,
     this.descripcionServicio,
+    this.serviciosAsociados = const [],
+    this.accesorios = const [],
   });
 
   factory TaskDetail.fromJson(Map<String, dynamic> j) {
