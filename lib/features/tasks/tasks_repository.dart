@@ -30,6 +30,8 @@ class TasksRepository {
 
   Future<TaskDetail> detail(int id) async {
     final res = await api.getJson('/tasks/$id');
+     // ignore: avoid_print
+    print('TASK_RAW=$res');
     return TaskDetail.fromJson(res);
   }
 
