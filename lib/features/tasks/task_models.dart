@@ -1,4 +1,6 @@
 import '../../shared/odoo_dt.dart';
+
+
 class TaskStage {
   final int id;
   final String name;
@@ -117,6 +119,41 @@ class Worksheet {
         signatureBase64: j['signature']?.toString(),
       );
 }
+class Recurso {
+  final int id;
+  final String recurso;
+  final String? empleado;
+  final bool esMio;
+  final bool iniciada;
+  final bool cerrada;
+  final bool hayTramoAbierto;
+  final double horasFacturar;
+  final double servicioMinimo;
+  final bool incidencia;
+  final DateTime? aperturaInformada;
+
+  const Recurso({
+    required this.id, required this.recurso, this.empleado,
+    required this.esMio, required this.iniciada, required this.cerrada,
+    required this.hayTramoAbierto, required this.horasFacturar,
+    required this.servicioMinimo, required this.incidencia,
+  });
+
+  factory Recurso.fromJson(Map<String, dynamic> j) => Recurso(
+        id: (j['id'] as num).toInt(),
+        recurso: j['recurso']?.toString() ?? '',
+        empleado: j['empleado']?.toString(),
+        esMio: j['es_mio'] == true,
+        iniciada: j['iniciada'] == true,
+        cerrada: j['cerrada'] == true,
+        hayTramoAbierto: j['hay_tramo_abierto'] == true,
+        horasFacturar: (j['horas_facturar'] as num?)?.toDouble() ?? 0.0,
+        servicioMinimo: (j['servicio_minimo'] as num?)?.toDouble() ?? 0.0,
+        incidencia: j['incidencia'] == true,
+        aperturaInformada: parseOdooDt(j['apertura_informada']?.toString()),
+      );
+}
+
 class ServicioAsociado {
   final int id;
   final String recurso;
@@ -152,6 +189,23 @@ class Accesorio {
         cantidad: (j['cantidad'] as num?) ?? 0,
       );
 }
+
+class Tramo {
+  final DateTime? inicio;
+  final DateTime? fin;
+  final double duracionHoras;
+
+  const Tramo({this.inicio, this.fin, required this.duracionHoras});
+
+  bool get abierto => fin == null;
+
+  factory Tramo.fromJson(Map<String, dynamic> j) => Tramo(
+        inicio: parseOdooDt(j['inicio']?.toString()),
+        fin: parseOdooDt(j['fin']?.toString()),
+        duracionHoras: (j['duracion_horas'] as num?)?.toDouble() ?? 0.0,
+      );
+}
+
 class TaskDetail extends TaskSummary {
   final Address carga;
   final Address descarga;
@@ -164,6 +218,8 @@ class TaskDetail extends TaskSummary {
   final DateTime? cierreInformada;
   final String? notasChofer;
   final String? descripcionServicio;
+  final List<Tramo> tramos;
+  final List<Recurso> recursos;
 
   const TaskDetail({
     required super.id,
@@ -189,7 +245,13 @@ class TaskDetail extends TaskSummary {
     this.descripcionServicio,
     this.serviciosAsociados = const [],
     this.accesorios = const [],
+    this.tramos = const [],
+    this.recursos = const [],
+
   });
+
+  bool get hayTramoAbierto => tramos.any((t) => t.abierto);
+  bool get tieneTramos => tramos.isNotEmpty;
 
   factory TaskDetail.fromJson(Map<String, dynamic> j) {
     final s = TaskSummary.fromJson(j);
@@ -217,12 +279,18 @@ class TaskDetail extends TaskSummary {
       accesorios: ((j['accesorios'] ?? []) as List)
           .map((e) => Accesorio.fromJson(e as Map<String, dynamic>))
           .toList(),
+      tramos: ((j['tramos'] ?? []) as List)
+          .map((e) => Tramo.fromJson(e as Map<String, dynamic>))
+          .toList(),
       aperturaHora: parseOdooDt(apertura['hora_sistema']?.toString()),
       aperturaInformada: parseOdooDt(apertura['hora_informada']?.toString()),
       cierreHora: parseOdooDt(cierre['hora_sistema']?.toString()),
       cierreInformada: parseOdooDt(cierre['hora_informada']?.toString()),
       notasChofer: j['notas_chofer']?.toString(),
       descripcionServicio: j['descripcion_servicio']?.toString(),
+      recursos: ((j['recursos'] ?? []) as List)
+          .map((e) => Recurso.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
   }
 }

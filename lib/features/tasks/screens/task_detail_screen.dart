@@ -8,6 +8,9 @@ import '../task_models.dart';
 import '../tasks_providers.dart';
 import 'signature_screen.dart';
 
+/// Selector rápido de hora (UX para la calle): Ahora / Hace 30 min / Hace 1 h
+/// / Otra hora… (esta abre el reloj, con la fecha de hoy por defecto).
+
 class TaskDetailScreen extends ConsumerStatefulWidget {
   const TaskDetailScreen({super.key, required this.taskId, this.readOnly = false});
   final int taskId;
@@ -125,13 +128,19 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     final alias = t.stage.alias;
     final parts = <Widget>[];
 
-    // ¿Hay OTRA tarea en marcha? (iniciada y sin finalizar, distinta de esta).
+    // Tareas en marcha que NO son esta (de la lista global).
     final lista = ref.read(tasksListProvider).valueOrNull;
-    final otraEnMarcha =
-        lista?.tasks.any((x) => x.id != t.id && x.iniciada && !x.cerrada) ?? false;
+    final enMarcha = (lista?.tasks ?? [])
+        .where((x) => x.id != t.id && x.iniciada && !x.cerrada)
+        .toList();
 
-    // No se pueden hacer dos tareas a la vez: avisamos en lugar de dejar iniciar.
-    if (alias == 'Informado' && !t.iniciada && otraEnMarcha) {
+    // ¿Cuáles son del MISMO servicio? (hermanas operables corriendo).
+    final idsServicio = {for (final a in t.serviciosAsociados) a.id};
+    final mismaEnMarcha = enMarcha.where((x) => idsServicio.contains(x.id)).toList();
+    final otraEnMarcha = enMarcha.where((x) => !idsServicio.contains(x.id)).toList();
+
+    // Bloqueo solo si hay otra de OTRO servicio en marcha (las del mismo se concatenan).
+    if (alias == 'Informado' && !t.iniciada && otraEnMarcha.isNotEmpty) {
       return SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -154,14 +163,28 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       );
     }
 
-    // Botón de etapa: Iniciar / Finalizar / Reabrir (excluyentes).
+    // Botón de etapa según el estado del timer.
+    final pausado = t.iniciada && t.tieneTramos && !t.hayTramoAbierto && alias != 'Finalizada';
     if (alias == 'Informado' && !t.iniciada) {
       parts.add(FilledButton.icon(
-        onPressed: _busy ? null : () => _start(t),
+        onPressed: _busy ? null : () => _start(t),   // primer inicio: pide hora
         icon: const Icon(Icons.play_arrow),
         label: const Text('Iniciar'),
       ));
     } else if (alias == 'Informado' && t.iniciada) {
+      if (t.hayTramoAbierto) {
+        parts.add(OutlinedButton.icon(
+          onPressed: _busy ? null : () => _pause(t),
+          icon: const Icon(Icons.pause),
+          label: const Text('Pausar'),
+        ));
+      } else if (pausado) {
+        parts.add(FilledButton.icon(
+          onPressed: _busy ? null : () => _resume(t),  // reanudar: sin selector de hora
+          icon: const Icon(Icons.play_arrow),
+          label: const Text('Reanudar'),
+        ));
+      }
       parts.add(FilledButton.icon(
         style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
         onPressed: _busy ? null : () => _finish(t),
@@ -204,73 +227,27 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       child: Padding(padding: const EdgeInsets.all(12), child: Row(children: row)),
     );
   }
-  /// Selector rápido de hora (UX para la calle): Ahora / Hace 30 min / Hace 1 h
-  /// / Otra hora… (esta abre el reloj, con la fecha de hoy por defecto).
-  Future<DateTime?> _pickTime() async {
-    final now = DateTime.now();
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.schedule),
-              title: const Text('Ahora'),
-              onTap: () => Navigator.pop(context, 'now'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.history),
-              title: const Text('Hace 30 min'),
-              onTap: () => Navigator.pop(context, 'm30'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.history),
-              title: const Text('Hace 1 hora'),
-              onTap: () => Navigator.pop(context, 'h1'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.edit_calendar),
-              title: const Text('Otra hora…'),
-              onTap: () => Navigator.pop(context, 'custom'),
-            ),
-          ],
-        ),
-      ),
-    );
-    switch (choice) {
-      case 'now':
-        return DateTime.now();
-      case 'm30':
-        return DateTime.now().subtract(const Duration(minutes: 30));
-      case 'h1':
-        return DateTime.now().subtract(const Duration(hours: 1));
-      case 'custom':
-        return _pickCustom(now);
-      default:
-        return null;
+
+  /// Pausa las hermanas del mismo servicio que estén en marcha (concatenación).
+  Future<void> _pausarHermanasEnMarcha(TaskDetail t, double? lat, double? lng) async {
+    final lista = ref.read(tasksListProvider).valueOrNull;
+    final idsServicio = {for (final a in t.serviciosAsociados) a.id};
+    final corriendo = (lista?.tasks ?? [])
+        .where((x) => x.id != t.id && x.iniciada && !x.cerrada && idsServicio.contains(x.id));
+    for (final x in corriendo) {
+      await ref.read(tasksRepoProvider).pause(x.id, lat: lat, lng: lng);
+      ref.invalidate(taskDetailProvider(x.id));
     }
   }
 
-  /// Reloj directo con la fecha de hoy; si pulsa el icono de calendario puede
-  /// cambiar el día (caso raro).
-  Future<DateTime?> _pickCustom(DateTime base) async {
-    final tm = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(base));
-    if (tm == null || !mounted) return null;
-    return DateTime(base.year, base.month, base.day, tm.hour, tm.minute);
-  }
-
   Future<void> _start(TaskDetail t) async {
-    // La hora de inicio se puede ajustar (p.ej. si se olvidó iniciar a tiempo).
-    final hora = await _pickTime();
+    final hora = await pickFriendlyTime(context);          // primer inicio: hora ajustable
     if (hora == null) return;
     setState(() => _busy = true);
     try {
       final (lat, lng) = await bestEffortLocation();
+      await _pausarHermanasEnMarcha(t, lat, lng);   // concatenación
 
-      // No se puede trabajar sin jornada: si el empleado tiene control de
-      // presencia y no hay jornada abierta, se ficha entrada con la MISMA hora
-      // informada de inicio de la tarea. Si falla, NO se inicia la tarea.
       final tieneAttendance =
           ref.read(sessionControllerProvider).profile?.capabilities.attendance ?? false;
       if (tieneAttendance) {
@@ -280,14 +257,43 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           ref.invalidate(attendanceStateProvider);
         }
       }
-
       await ref.read(tasksRepoProvider).start(t.id, lat: lat, lng: lng, informada: hora);
       ref.invalidate(taskDetailProvider(t.id));
+      ref.invalidate(tasksListProvider);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('No se pudo iniciar: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo iniciar: $e')));
       }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Reanudar: abre un tramo nuevo sin pedir hora (la apertura informada ya está fijada).
+  Future<void> _resume(TaskDetail t) async {
+    setState(() => _busy = true);
+    try {
+      final (lat, lng) = await bestEffortLocation();
+      await _pausarHermanasEnMarcha(t, lat, lng);   // concatenación
+      await ref.read(tasksRepoProvider).start(t.id, lat: lat, lng: lng);  // sin informada
+      ref.invalidate(taskDetailProvider(t.id));
+      ref.invalidate(tasksListProvider);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo reanudar: $e')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _pause(TaskDetail t) async {
+    setState(() => _busy = true);
+    try {
+      final (lat, lng) = await bestEffortLocation();
+      await ref.read(tasksRepoProvider).pause(t.id, lat: lat, lng: lng);
+      ref.invalidate(taskDetailProvider(t.id));
+      ref.invalidate(tasksListProvider);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo pausar: $e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -313,7 +319,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
   Future<void> _finish(TaskDetail t) async {
     // 1) Hora de cierre (editable).
-    final cierre = await _pickTime();
+    final cierre = await pickFriendlyTime(context);
     if (cierre == null) return;
 
     // 2) Pausa/comida: obligatorio informarla (aunque sea "Ninguna").
@@ -347,32 +353,6 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     }
   }
 
-  /// Pausa/comida del servicio (obligatorio elegir). Devuelve null si cancela.
-  Future<double?> _pickPausa() {
-    return showDialog<double>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => SimpleDialog(
-        title: const Text('Tiempo de pausa / comida'),
-        children: [
-          for (final opt in const [
-            ('Ninguna', 0.0),
-            ('30 min', 0.5),
-            ('1 hora', 1.0),
-            ('1 h 30 min', 1.5),
-            ('2 horas', 2.0),
-          ])
-            SimpleDialogOption(
-              onPressed: () => Navigator.pop(context, opt.$2),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(opt.$1, style: const TextStyle(fontSize: 16)),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
 
   Future<bool?> _confirmFinish(double horas, bool esMinimo) {
     return showDialog<bool>(
@@ -436,11 +416,8 @@ class _Body extends StatelessWidget {
           if (task.cierreHora != null)
             _kv('Cierre', task.cierreHora!.toLocal().toString().substring(0, 16)),
         ]),
-        if (task.serviciosAsociados.isNotEmpty)
-          _Section(icon: Icons.account_tree, title: 'Otros servicios asociados',
-              color: scheme.primary, rows: [
-            for (final a in task.serviciosAsociados) _AsociadoTile(a: a),
-          ]),
+
+        _RecursosSection(madreId: task.id, recursos: task.recursos),
 
         if (task.accesorios.isNotEmpty)
           _Section(icon: Icons.handyman, title: 'Accesorios a cargar',
@@ -614,4 +591,244 @@ class _Tag extends StatelessWidget {
           Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
         ]),
       );
+}
+class _RecursosSection extends ConsumerStatefulWidget {
+  const _RecursosSection({required this.madreId, required this.recursos});
+  final int madreId;
+  final List<Recurso> recursos;
+  @override
+  ConsumerState<_RecursosSection> createState() => _RecursosSectionState();
+
+  Future<void> _cerrar(Recurso r) async {
+    try {
+      final ok = await cerrarRecursoDialog(context, ref, r);
+      if (ok) {
+        ref.invalidate(taskDetailProvider(widget.madreId));
+        ref.invalidate(tasksListProvider);
+      }
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo cerrar: $e')));
+    }
+  }
+}
+
+class _RecursosSectionState extends ConsumerState<_RecursosSection> {
+  bool _busy = false;
+
+  bool get _detallista {
+    final c = ref.read(sessionControllerProvider).profile?.config;
+    return c != null && c.mostrarInicioCierre && !c.capturaManualHoras;
+  }
+
+  Future<void> _pausarActivo(int exceptoId) async {
+    for (final r in widget.recursos) {
+      if (r.esMio && r.hayTramoAbierto && r.id != exceptoId) {
+        await ref.read(tasksRepoProvider).pause(r.id);
+      }
+    }
+  }
+
+  Future<void> _run(Future<void> Function() body) async {
+    setState(() => _busy = true);
+    try {
+      await body();
+      ref.invalidate(taskDetailProvider(widget.madreId));
+      ref.invalidate(tasksListProvider);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _iniciar(Recurso r) async {
+    final hora = await pickFriendlyTime(context);   // primer inicio: hora ajustable
+    if (hora == null) return;
+    await _run(() async {
+      final (lat, lng) = await bestEffortLocation();
+      await _pausarActivo(r.id);                     // concatenación
+      await ref.read(tasksRepoProvider).start(r.id, lat: lat, lng: lng, informada: hora);
+    });
+  }
+
+  Future<void> _reanudar(Recurso r) => _run(() async {
+        final (lat, lng) = await bestEffortLocation();
+        await _pausarActivo(r.id);                   // concatenación
+        await ref.read(tasksRepoProvider).start(r.id, lat: lat, lng: lng); // sin hora
+      });
+
+  Future<void> _pausar(Recurso r) => _run(() async {
+        final (lat, lng) = await bestEffortLocation();
+        await ref.read(tasksRepoProvider).pause(r.id, lat: lat, lng: lng);
+      });
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.recursos.isEmpty) return const SizedBox.shrink();
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: const [
+            Icon(Icons.list_alt, size: 18),
+            SizedBox(width: 8),
+            Text('Recursos del servicio', style: TextStyle(fontWeight: FontWeight.bold)),
+          ]),
+          const SizedBox(height: 8),
+          for (final r in widget.recursos) _fila(r),
+        ]),
+      ),
+    );
+  }
+
+  Widget _fila(Recurso r) {
+    // Verde = mío; gris = de otro operario (lectura).
+    final mio = r.esMio;
+    final color = mio ? Colors.green.shade800 : Colors.black54;
+    final estado = r.cerrada
+        ? 'Cerrada'
+        : r.hayTramoAbierto
+            ? 'En proceso'
+            : (r.iniciada ? 'En pausa' : '');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(children: [
+        Icon(mio ? Icons.precision_manufacturing : Icons.lock_outline, size: 18, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(r.recurso, style: TextStyle(color: color, fontWeight: FontWeight.w500)),
+            if (!mio && r.empleado != null)
+              Text(r.empleado!, style: const TextStyle(color: Colors.black45, fontSize: 12)),
+            if (estado.isNotEmpty)
+              Text(estado, style: TextStyle(color: color, fontSize: 12)),
+          ]),
+        ),
+        if (mio && !r.cerrada) ..._botones(r),
+      ]),
+    );
+  }
+
+  List<Widget> _botones(Recurso r) {
+    if (_busy) return [const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))];
+    if (!r.iniciada) {
+      return [IconButton(icon: const Icon(Icons.play_arrow, color: Colors.green), tooltip: 'Iniciar', onPressed: () => _iniciar(r))];
+    }
+    final acciones = <Widget>[];
+    if (_detallista && r.hayTramoAbierto) {
+      acciones.add(IconButton(icon: const Icon(Icons.pause, color: Colors.orange), tooltip: 'Pausar', onPressed: () => _pausar(r)));
+    } else if (_detallista && !r.hayTramoAbierto) {
+      acciones.add(IconButton(icon: const Icon(Icons.play_arrow, color: Colors.green), tooltip: 'Reanudar', onPressed: () => _reanudar(r)));
+    }
+    acciones.add(IconButton(icon: const Icon(Icons.stop_circle, color: Colors.red), tooltip: 'Cerrar', onPressed: () => _cerrar(r)));
+    return acciones;
+  }
+}
+Future<DateTime?> pickFriendlyTime(BuildContext context) async {
+  final now = DateTime.now();
+  final choice = await showModalBottomSheet<String>(
+    context: context,
+    builder: (_) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ListTile(leading: const Icon(Icons.schedule), title: const Text('Ahora'),
+              onTap: () => Navigator.pop(context, 'now')),
+          ListTile(leading: const Icon(Icons.history), title: const Text('Hace 30 min'),
+              onTap: () => Navigator.pop(context, 'm30')),
+          ListTile(leading: const Icon(Icons.history), title: const Text('Hace 1 hora'),
+              onTap: () => Navigator.pop(context, 'h1')),
+          ListTile(leading: const Icon(Icons.edit_calendar), title: const Text('Otra hora…'),
+              onTap: () => Navigator.pop(context, 'custom')),
+        ],
+      ),
+    ),
+  );
+  switch (choice) {                                    // ← AHORA aquí
+    case 'now':
+      return DateTime.now();
+    case 'm30':
+      return DateTime.now().subtract(const Duration(minutes: 30));
+    case 'h1':
+      return DateTime.now().subtract(const Duration(hours: 1));
+    case 'custom':
+      return _pickCustom(context, now);                // ← ojo: ver punto siguiente
+    default:
+      return null;
+  }
+}
+
+/// Si el recurso queda bajo mínimo: el chófer elige Mínimo o Incidencia.
+Future<String?> pickMinimoIncidencia(BuildContext context, double horas, double minimo) {
+  return showDialog<String>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Por debajo del mínimo'),
+      content: Text('Has indicado ${horas.toStringAsFixed(1)} h, por debajo del mínimo '
+          'de ${minimo.toStringAsFixed(0)} h.\n\n'
+          '· Mínimo: se factura el servicio mínimo.\n'
+          '· Incidencia: se factura lo indicado. Anota el motivo en observaciones.'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+        OutlinedButton(onPressed: () => Navigator.pop(context, 'incidencia'), child: const Text('Incidencia')),
+        FilledButton(onPressed: () => Navigator.pop(context, 'minimo'), child: const Text('Mínimo')),
+      ],
+    ),
+  );
+}
+
+/// Cierre de UN recurso (reutilizable). Devuelve true si se cerró.
+Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r) async {
+  final cierre = await pickFriendlyTime(context);
+  if (cierre == null || !context.mounted) return false;
+  final pausa = await pickPausa(context);
+  if (pausa == null || !context.mounted) return false;
+
+  String modo = 'normal';
+  // Provisional SOLO para decidir si ofrecer Mínimo/Incidencia. El cálculo real lo hace el backend.
+  if (r.servicioMinimo > 0 && r.aperturaInformada != null) {
+    final h = cierre.difference(r.aperturaInformada!).inMinutes / 60.0;
+    final horas = ((h * 2).ceil() / 2.0 - pausa).clamp(0, double.infinity).toDouble();
+    if (horas < r.servicioMinimo) {
+      final m = await pickMinimoIncidencia(context, horas, r.servicioMinimo);
+      if (m == null) return false;
+      modo = m;
+    }
+  }
+  final (lat, lng) = await bestEffortLocation();
+  await ref.read(tasksRepoProvider).close(r.id, cierreInformada: cierre, pausa: pausa, modo: modo, lat: lat, lng: lng);
+  return true;
+}
+
+/// Reloj directo con la fecha de hoy; si pulsa el icono de calendario puede
+  /// cambiar el día (caso raro).
+Future<DateTime?> _pickCustom(BuildContext context, DateTime base) async {
+  final tm = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(base));
+  if (tm == null) return null;
+  return DateTime(base.year, base.month, base.day, tm.hour, tm.minute);
+}
+
+/// Pausa/comida del servicio (obligatorio elegir). Devuelve null si cancela.
+Future<double?> pickPausa(BuildContext context) {
+  return showDialog<double>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => SimpleDialog(
+      title: const Text('Tiempo de pausa / comida'),
+      children: [
+        for (final opt in const [
+          ('Ninguna', 0.0), ('30 min', 0.5), ('1 hora', 1.0),
+          ('1 h 30 min', 1.5), ('2 horas', 2.0),
+        ])
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, opt.$2),
+            child: Padding(padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(opt.$1, style: const TextStyle(fontSize: 16))),
+          ),
+      ],
+    ),
+  );
 }

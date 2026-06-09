@@ -100,7 +100,7 @@ class _TaskCard extends StatelessWidget {
           context,
           MaterialPageRoute(builder: (_) => TaskDetailScreen(taskId: task.id, readOnly: readOnly)),
         ),
-        title: Text(task.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(task.name, maxLines: 3, overflow: TextOverflow.ellipsis),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [

@@ -42,6 +42,33 @@ class TasksRepository {
     });
     return TaskDetail.fromJson(res);
   }
+  /// Cierra UN recurso: cierre informado + pausa + modo. El backend deriva el
+  /// facturable (ceil30 − pausa). NO mueve etapa.
+  Future<TaskDetail> close(int id, {
+    DateTime? cierreInformada,
+    double? pausa,
+    String modo = 'normal',           // 'normal' | 'minimo' | 'incidencia'
+    double? lat,
+    double? lng,
+  }) async {
+    final res = await api.postJson('/tasks/$id/close', data: {
+      if (cierreInformada != null) 'cierre_informada': _fmtUtc(cierreInformada),
+      if (pausa != null) 'pausa': pausa,
+      'modo': modo,
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
+    });
+    return TaskDetail.fromJson(res);
+  }
+
+  /// Finaliza el servicio: mueve la madre a Finalizada (arrastra hijas).
+  Future<TaskDetail> finalize(int id, {double? lat, double? lng}) async {
+    final res = await api.postJson('/tasks/$id/finalize', data: {
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
+    });
+    return TaskDetail.fromJson(res);
+  }
 
   /// Finaliza la tarea. `informada` es la hora de cierre declarada (editable);
   /// las horas a facturar se calculan en el servidor con las horas informadas.
@@ -51,6 +78,14 @@ class TasksRepository {
       if (lng != null) 'lng': lng,
       if (informada != null) 'informada': _fmtUtc(informada),
       if (pausa != null) 'pausa': pausa,
+    });
+    return TaskDetail.fromJson(res);
+  }
+  /// Pausa la tarea: cierra el tramo abierto (no cambia de etapa).
+  Future<TaskDetail> pause(int id, {double? lat, double? lng}) async {
+    final res = await api.postJson('/tasks/$id/pause', data: {
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
     });
     return TaskDetail.fromJson(res);
   }

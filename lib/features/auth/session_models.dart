@@ -26,6 +26,7 @@ class OperatorProfile {
   final String deviceMode; // personal | kiosk
   final bool isManager;    // jefe de tráfico (x_app_admin)
   final Capabilities capabilities;
+  final SessionConfig config;
 
   const OperatorProfile({
     required this.employeeId,
@@ -34,6 +35,7 @@ class OperatorProfile {
     required this.deviceMode,
     required this.isManager,
     required this.capabilities,
+    this.config = SessionConfig.fallback,
   });
 
   factory OperatorProfile.fromJson(Map<String, dynamic> j) {
@@ -46,10 +48,34 @@ class OperatorProfile {
       deviceMode: (dev['mode'] ?? 'personal') as String,
       isManager: j['is_manager'] == true,
       capabilities: Capabilities.fromJson((j['capabilities'] ?? {}) as Map<String, dynamic>),
+      config: j['config'] is Map
+          ? SessionConfig.fromJson(j['config'] as Map<String, dynamic>)
+          : SessionConfig.fallback,
     );
   }
 }
 
+class SessionConfig {
+  final bool capturaManualHoras;
+  final bool mostrarInicioCierre;
+
+  const SessionConfig({
+    required this.capturaManualHoras,
+    required this.mostrarInicioCierre,
+  });
+
+  factory SessionConfig.fromJson(Map<String, dynamic> j) => SessionConfig(
+        capturaManualHoras: j['captura_manual_horas'] == true,
+        mostrarInicioCierre: j['mostrar_inicio_cierre'] == true,
+      );
+
+  // Por si un /me viejo no trae config: por defecto, comportamiento actual
+  // (timer con botón = detallista).
+  static const fallback = SessionConfig(
+    capturaManualHoras: false,
+    mostrarInicioCierre: true,
+  );
+}
 /// Estado de enrolamiento del dispositivo.
 enum EnrollmentState { pending, approved, revoked, unknown }
 
