@@ -70,17 +70,6 @@ class TasksRepository {
     return TaskDetail.fromJson(res);
   }
 
-  /// Finaliza la tarea. `informada` es la hora de cierre declarada (editable);
-  /// las horas a facturar se calculan en el servidor con las horas informadas.
-  Future<TaskDetail> finish(int id, {double? lat, double? lng, DateTime? informada, double? pausa}) async {
-    final res = await api.postJson('/tasks/$id/finish', data: {
-      if (lat != null) 'lat': lat,
-      if (lng != null) 'lng': lng,
-      if (informada != null) 'informada': _fmtUtc(informada),
-      if (pausa != null) 'pausa': pausa,
-    });
-    return TaskDetail.fromJson(res);
-  }
   /// Pausa la tarea: cierra el tramo abierto (no cambia de etapa).
   Future<TaskDetail> pause(int id, {double? lat, double? lng}) async {
     final res = await api.postJson('/tasks/$id/pause', data: {

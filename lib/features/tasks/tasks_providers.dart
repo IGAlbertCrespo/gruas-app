@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../core/providers.dart';
+import '../../shared/journey_ledger.dart';
 import '../attendance/attendance_models.dart';
 import '../attendance/attendance_repository.dart';
 import '../attendance/offline_queue.dart';
@@ -10,7 +11,19 @@ import 'tasks_repository.dart';
 
 // --- Asistencia ---
 final offlineQueueProvider = Provider<OfflineQueue>((ref) {
-  return OfflineQueue(const FlutterSecureStorage(
+  return OfflineQueue(
+    const FlutterSecureStorage(
+      aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    ),
+    key: 'attendance_offline_queue',
+  );
+});
+
+/// Libro de jornada local (reconciliación de la pausa de comida al fichar
+/// salida). Lo comparten Tareas (imputación al cerrar) y Asistencia (pausas
+/// fichadas + cierre).
+final journeyLedgerProvider = Provider<JourneyLedger>((ref) {
+  return JourneyLedger(const FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
   ));
 });

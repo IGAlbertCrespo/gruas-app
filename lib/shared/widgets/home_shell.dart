@@ -5,6 +5,8 @@ import '../../features/auth/session_controller.dart';
 import '../../features/auth/screens/splash_screen.dart' show kAppCommercialName;
 import '../../features/attendance/screens/attendance_screen.dart';
 import '../../features/tasks/screens/tasks_list_screen.dart';
+import '../../features/maintenance/maintenance_providers.dart';
+import '../../features/maintenance/screens/maintenance_screen.dart';
 import '../../core/env/environment.dart';
 import '../../core/providers.dart';
 import '../app_version.dart';
@@ -28,11 +30,19 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     final profile = session.profile;
     final caps = profile?.capabilities;
 
+    // Gating de averías SIN tocar backend: la pestaña aparece solo si el
+    // catálogo confirma `puede_reportar` (x_app_averias). Mientras carga o si
+    // falla la red, no se pinta (se reintentará).
+    final puedeAverias =
+        ref.watch(maintenanceCatalogProvider).valueOrNull?.puedeReportar ?? false;
+
     final tabs = <({IconData icon, String label, Widget page})>[
       if (caps?.attendance ?? true)
         (icon: Icons.access_time, label: 'Asistencia', page: const AttendanceScreen()),
       if (caps?.tasks ?? true)
         (icon: Icons.assignment, label: 'Tareas', page: const TasksListScreen()),
+      if (puedeAverias)
+        (icon: Icons.build, label: 'Averías', page: const MaintenanceScreen()),
     ];
     if (tabs.isEmpty) {
       return const Scaffold(body: Center(child: Text('Sin permisos asignados en la app.')));

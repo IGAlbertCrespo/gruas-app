@@ -88,6 +88,25 @@ class AttendanceRepository {
         if (attendanceId != null) 'attendance_id': attendanceId,
       });
 
+  /// Pausa retroactiva completa (inicio + duración) para la comida que el chófer
+  /// no fichó en tiempo real y que se incorpora a la jornada al fichar salida.
+  /// El backend la marca con x_source='mobile_forced'. OJO: aquí el inicio NO es
+  /// el momento de la operación, sino [start] (p. ej. las 14:00), que viaja en
+  /// `data`; por eso el `timestamp` de la cola es irrelevante para esta op.
+  Future<Map<String, dynamic>> breakForced(
+    String uuid, {
+    required DateTime start,
+    required double durationHours,
+    int? attendanceId,
+    int? breakTypeId,
+  }) =>
+      _op('/attendance/break/forced', 'break_forced', uuid, {
+        'start': _fmtUtc(start),
+        'duration_hours': durationHours,
+        if (attendanceId != null) 'attendance_id': attendanceId,
+        if (breakTypeId != null) 'break_type_id': breakTypeId,
+      });
+
   /// Sube todas las operaciones pendientes y confirma las aceptadas.
   Future<int> syncPending() async {
     final pending = await queue.pending();

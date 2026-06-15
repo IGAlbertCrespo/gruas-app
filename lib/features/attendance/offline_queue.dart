@@ -28,9 +28,13 @@ class OfflineOp {
 }
 
 class OfflineQueue {
-  OfflineQueue(this._storage);
+  /// [key] identifica la cola en el almacén seguro, de modo que cada feature
+  /// (asistencia, averías…) tenga la suya sin colisionar. El serializado del
+  /// /sync lo construye cada repositorio, porque el contrato de cada endpoint
+  /// difiere (p. ej. asistencia envía type+timestamp; averías solo data).
+  OfflineQueue(this._storage, {required String key}) : _key = key;
   final FlutterSecureStorage _storage;
-  static const _key = 'attendance_offline_queue';
+  final String _key;
 
   Future<List<OfflineOp>> _read() async {
     final raw = await _storage.read(key: _key);

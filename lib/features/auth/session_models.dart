@@ -58,15 +58,18 @@ class OperatorProfile {
 class SessionConfig {
   final bool capturaManualHoras;
   final bool mostrarInicioCierre;
+  final bool mostrarHorasReales;
 
   const SessionConfig({
     required this.capturaManualHoras,
     required this.mostrarInicioCierre,
+    this.mostrarHorasReales = false,
   });
 
   factory SessionConfig.fromJson(Map<String, dynamic> j) => SessionConfig(
         capturaManualHoras: j['captura_manual_horas'] == true,
         mostrarInicioCierre: j['mostrar_inicio_cierre'] == true,
+        mostrarHorasReales: j['mostrar_horas_reales'] == true,
       );
 
   // Por si un /me viejo no trae config: por defecto, comportamiento actual

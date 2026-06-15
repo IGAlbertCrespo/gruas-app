@@ -3,18 +3,19 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../shared/location.dart';
+import '../../../shared/pausa_dialog.dart';
 import '../../auth/session_controller.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
 import 'signature_screen.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-/// Selector rápido de hora (UX para la calle): Ahora / Hace 30 min / Hace 1 h
-/// / Otra hora… (esta abre el reloj, con la fecha de hoy por defecto).
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
   const TaskDetailScreen({super.key, required this.taskId, this.readOnly = false});
   final int taskId;
   final bool readOnly;
+
   @override
   ConsumerState<TaskDetailScreen> createState() => _TaskDetailScreenState();
 }
@@ -124,83 +125,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   // ---------- Acciones ----------
+
   Widget? _actionsBar(TaskDetail t) {
-    final alias = t.stage.alias;
     final parts = <Widget>[];
-
-    // Tareas en marcha que NO son esta (de la lista global).
-    final lista = ref.read(tasksListProvider).valueOrNull;
-    final enMarcha = (lista?.tasks ?? [])
-        .where((x) => x.id != t.id && x.iniciada && !x.cerrada)
-        .toList();
-
-    // ¿Cuáles son del MISMO servicio? (hermanas operables corriendo).
-    final idsServicio = {for (final a in t.serviciosAsociados) a.id};
-    final mismaEnMarcha = enMarcha.where((x) => idsServicio.contains(x.id)).toList();
-    final otraEnMarcha = enMarcha.where((x) => !idsServicio.contains(x.id)).toList();
-
-    // Bloqueo solo si hay otra de OTRO servicio en marcha (las del mismo se concatenan).
-    if (alias == 'Informado' && !t.iniciada && otraEnMarcha.isNotEmpty) {
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Colors.orange.shade50,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.orange.shade200),
-            ),
-            child: Row(children: [
-              Icon(Icons.info_outline, color: Colors.orange.shade800),
-              const SizedBox(width: 10),
-              Expanded(child: Text(
-                'Tienes una tarea en proceso. Finalízala antes de iniciar otra.',
-                style: TextStyle(color: Colors.orange.shade900))),
-            ]),
-          ),
-        ),
-      );
-    }
-
-    // Botón de etapa según el estado del timer.
-    final pausado = t.iniciada && t.tieneTramos && !t.hayTramoAbierto && alias != 'Finalizada';
-    if (alias == 'Informado' && !t.iniciada) {
-      parts.add(FilledButton.icon(
-        onPressed: _busy ? null : () => _start(t),   // primer inicio: pide hora
-        icon: const Icon(Icons.play_arrow),
-        label: const Text('Iniciar'),
-      ));
-    } else if (alias == 'Informado' && t.iniciada) {
-      if (t.hayTramoAbierto) {
-        parts.add(OutlinedButton.icon(
-          onPressed: _busy ? null : () => _pause(t),
-          icon: const Icon(Icons.pause),
-          label: const Text('Pausar'),
-        ));
-      } else if (pausado) {
-        parts.add(FilledButton.icon(
-          onPressed: _busy ? null : () => _resume(t),  // reanudar: sin selector de hora
-          icon: const Icon(Icons.play_arrow),
-          label: const Text('Reanudar'),
-        ));
-      }
-      parts.add(FilledButton.icon(
-        style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
-        onPressed: _busy ? null : () => _finish(t),
-        icon: const Icon(Icons.check_circle),
-        label: const Text('Finalizar'),
-      ));
-    } else if (alias == 'Finalizada') {
-      parts.add(OutlinedButton.icon(
-        onPressed: _busy ? null : () => _reopen(t),
-        icon: const Icon(Icons.undo),
-        label: const Text('Reabrir'),
-      ));
-    }
-
-    // Firma: "Ver firma" siempre que esté firmada; "Firmar" solo si está iniciada
-    // (no tiene sentido firmar una tarea sin iniciar).
     if (t.hasSignature) {
       parts.add(OutlinedButton.icon(
         onPressed: () => Navigator.push(context,
@@ -208,106 +135,51 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         icon: const Icon(Icons.visibility),
         label: const Text('Ver firma'),
       ));
-    } else if (t.iniciada) {
-      parts.add(OutlinedButton.icon(
-        onPressed: () => Navigator.push(context,
-            MaterialPageRoute(builder: (_) => SignatureScreen(task: t))),
-        icon: const Icon(Icons.draw),
-        label: const Text('Firmar'),
+    }
+    if (t.stage.alias != 'Finalizada') {
+      parts.add(FilledButton.icon(
+        style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
+        onPressed: _busy ? null : () => _finalizarTarea(t),
+        icon: const Icon(Icons.check_circle),
+        label: const Text('Finalizar tarea'),
       ));
     }
-
     if (parts.isEmpty) return null;
     final row = <Widget>[];
     for (var i = 0; i < parts.length; i++) {
       if (i > 0) row.add(const SizedBox(width: 8));
       row.add(Expanded(child: parts[i]));
     }
-    return SafeArea(
-      child: Padding(padding: const EdgeInsets.all(12), child: Row(children: row)),
-    );
+    return SafeArea(child: Padding(padding: const EdgeInsets.all(12), child: Row(children: row)));
   }
 
-  /// Pausa las hermanas del mismo servicio que estén en marcha (concatenación).
-  Future<void> _pausarHermanasEnMarcha(TaskDetail t, double? lat, double? lng) async {
-    final lista = ref.read(tasksListProvider).valueOrNull;
-    final idsServicio = {for (final a in t.serviciosAsociados) a.id};
-    final corriendo = (lista?.tasks ?? [])
-        .where((x) => x.id != t.id && x.iniciada && !x.cerrada && idsServicio.contains(x.id));
-    for (final x in corriendo) {
-      await ref.read(tasksRepoProvider).pause(x.id, lat: lat, lng: lng);
-      ref.invalidate(taskDetailProvider(x.id));
+  Future<void> _finalizarTarea(TaskDetail t) async {
+    // 1) Cerrar MIS recursos pendientes (iniciados y sin cerrar), reusando 3a.
+    final pendientes = t.recursos.where((r) => r.esMio && r.iniciada && !r.cerrada).toList();
+    for (final r in pendientes) {
+      final ok = await cerrarRecursoDialog(context, ref, r);
+      if (!ok || !mounted) return; // canceló uno → aborta finalización
     }
+    ref.invalidate(taskDetailProvider(t.id));
+    // 2) Ir a la pantalla de resumen/firma con la madre fresca.
+    final fresh = await ref.read(tasksRepoProvider).detail(t.id);
+    if (!mounted) return;
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => SignatureScreen(task: fresh)));
+    ref.invalidate(taskDetailProvider(t.id));
+    ref.invalidate(tasksListProvider);
   }
 
-  Future<void> _start(TaskDetail t) async {
-    final hora = await pickFriendlyTime(context);          // primer inicio: hora ajustable
-    if (hora == null) return;
-    setState(() => _busy = true);
-    try {
-      final (lat, lng) = await bestEffortLocation();
-      await _pausarHermanasEnMarcha(t, lat, lng);   // concatenación
 
-      final tieneAttendance =
-          ref.read(sessionControllerProvider).profile?.capabilities.attendance ?? false;
-      if (tieneAttendance) {
-        final estado = await ref.read(attendanceRepoProvider).currentState();
-        if (!estado.hasOpen) {
-          await ref.read(attendanceRepoProvider).checkIn(_uuid(), lat: lat, lng: lng, at: hora);
-          ref.invalidate(attendanceStateProvider);
-        }
-      }
-      await ref.read(tasksRepoProvider).start(t.id, lat: lat, lng: lng, informada: hora);
-      ref.invalidate(taskDetailProvider(t.id));
-      ref.invalidate(tasksListProvider);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo iniciar: $e')));
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  /// Reanudar: abre un tramo nuevo sin pedir hora (la apertura informada ya está fijada).
-  Future<void> _resume(TaskDetail t) async {
-    setState(() => _busy = true);
-    try {
-      final (lat, lng) = await bestEffortLocation();
-      await _pausarHermanasEnMarcha(t, lat, lng);   // concatenación
-      await ref.read(tasksRepoProvider).start(t.id, lat: lat, lng: lng);  // sin informada
-      ref.invalidate(taskDetailProvider(t.id));
-      ref.invalidate(tasksListProvider);
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo reanudar: $e')));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _pause(TaskDetail t) async {
-    setState(() => _busy = true);
-    try {
-      final (lat, lng) = await bestEffortLocation();
-      await ref.read(tasksRepoProvider).pause(t.id, lat: lat, lng: lng);
-      ref.invalidate(taskDetailProvider(t.id));
-      ref.invalidate(tasksListProvider);
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo pausar: $e')));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  String _uuid() {
-    final r = math.Random();
-    return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
-  }
 
   Future<void> _reopen(TaskDetail t) async {
     setState(() => _busy = true);
     try {
       await ref.read(tasksRepoProvider).reopen(t.id);
+      // Al reabrir, retira del libro las pausas imputadas de sus recursos para
+      // que no cuenten si la tarea ya no se vuelve a cerrar.
+      for (final r in t.recursos) {
+        await ref.read(journeyLedgerProvider).removeDeclared(r.id);
+      }
       ref.invalidate(taskDetailProvider(t.id));
       ref.invalidate(tasksListProvider);
     } catch (e) {
@@ -317,68 +189,19 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     }
   }
 
-  Future<void> _finish(TaskDetail t) async {
-    // 1) Hora de cierre (editable).
-    final cierre = await pickFriendlyTime(context);
-    if (cierre == null) return;
-
-    // 2) Pausa/comida: obligatorio informarla (aunque sea "Ninguna").
-    final pausa = await _pickPausa();
-    if (pausa == null) return; // canceló: no finaliza
-
-    // 3) Cálculo: horas (ceil 30) menos pausa; el mínimo se evalúa tras el descuento.
-    final apertura = t.aperturaInformada ?? t.aperturaHora;
-    double horas = 0;
-    if (apertura != null) {
-      final h = cierre.difference(apertura).inMinutes / 60.0;
-      horas = (h * 2).ceil() / 2.0;
-    }
-    horas = (horas - pausa).clamp(0, double.infinity).toDouble();
-    final esMinimo = t.worksheet.servicioMinimo > 0 && horas < t.worksheet.servicioMinimo;
-
-    final ok = await _confirmFinish(horas, esMinimo);
-    if (ok != true) return;
-
-    setState(() => _busy = true);
-    try {
-      final (lat, lng) = await bestEffortLocation();
-      await ref.read(tasksRepoProvider).finish(t.id, lat: lat, lng: lng, informada: cierre, pausa: pausa);
-      ref.invalidate(taskDetailProvider(t.id));
-      ref.invalidate(tasksListProvider);
-      // Nos quedamos en el detalle (ya finalizada); no volvemos a la lista.
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
   }
-
-
-  Future<bool?> _confirmFinish(double horas, bool esMinimo) {
-    return showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Finalizar servicio'),
-        content: Text(esMinimo
-            ? 'El tiempo informado es inferior al mínimo: se facturará el servicio mínimo. ¿Finalizar?'
-            : 'Horas a facturar: ${horas.toStringAsFixed(1)} h. ¿Finalizar?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Finalizar')),
-        ],
-      ),
-    );
-  }
-}
 
 // ============================ Cuerpo (presentación) ============================
-class _Body extends StatelessWidget {
+class _Body extends ConsumerWidget {            // ← era StatelessWidget
   const _Body({required this.task});
-  final TaskDetail task;
+  final TaskDetail task;                          // ← SOLO task como campo. NADA de mostrarReales aquí.
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {   // ← añade WidgetRef ref
     final scheme = Theme.of(context).colorScheme;
+    final mostrarReales =                          // ← AQUÍ, variable LOCAL dentro de build
+        ref.read(sessionControllerProvider).profile?.config.mostrarHorasReales ?? false;
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -433,7 +256,8 @@ class _Body extends StatelessWidget {
           ]),
 
         _Section(icon: Icons.assignment_turned_in, title: 'Hoja de trabajo', color: scheme.primary, rows: [
-          _kv('Horas reales', task.worksheet.horasReales.toStringAsFixed(2)),
+          if (mostrarReales)
+            _kv('Horas reales', task.worksheet.horasReales.toStringAsFixed(2)),
           if (task.worksheet.pausaServicio > 0)
             _kv('Pausa', '${task.worksheet.pausaServicio.toStringAsFixed(1)} h'),
           if (task.worksheet.aplicarMinimo)
@@ -487,51 +311,72 @@ class _AddressCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final Address a;
+
+  Future<void> _abrirMaps(BuildContext context, String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo abrir el mapa.')));
+    }
+  }
+
+  /// Abre el marcador con el número precargado (un toque para llamar).
+  /// Normaliza el número a dígitos y '+' por si Odoo lo trae con espacios.
+  Future<void> _llamar(BuildContext context, String numero) async {
+    final tel = numero.replaceAll(RegExp(r'[^0-9+]'), '');
+    if (tel.isEmpty) return;
+    final uri = Uri.parse('tel:$tel');
+    final ok = await launchUrl(uri);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No se pudo abrir el marcador.')));
+    }
+  }
+
+  /// Fila de teléfono pulsable, con el mismo layout etiqueta/valor que _kv.
+  Widget _telRow(BuildContext context, String numero) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const SizedBox(
+            width: 120,
+            child: Text('Teléfono', style: TextStyle(color: Colors.black54)),
+          ),
+          Expanded(
+            child: InkWell(
+              onTap: () => _llamar(context, numero),
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(children: [
+                  const Icon(Icons.phone, size: 16, color: Colors.blue),
+                  const SizedBox(width: 6),
+                  Flexible(child: Text(numero, style: const TextStyle(color: Colors.blue))),
+                ]),
+              ),
+            ),
+          ),
+        ]),
+      );
+
   @override
   Widget build(BuildContext context) {
     final lines = [a.direccion, a.poblacion, a.codigoPostal].where((e) => (e ?? '').isNotEmpty).join(', ');
     return _Section(icon: icon, title: title, color: color, rows: [
       if (lines.isNotEmpty) _kv('Dirección', lines),
       if ((a.contacto ?? '').isNotEmpty) _kv('Contacto', a.contacto!),
-      if ((a.telefono ?? '').isNotEmpty) _kv('Teléfono', a.telefono!),
+      if ((a.telefono ?? '').isNotEmpty) _telRow(context, a.telefono!),
+      if ((a.url ?? '').isNotEmpty)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => _abrirMaps(context, a.url!),
+            icon: const Icon(Icons.map, size: 18),
+            label: const Text('Ver en Maps'),
+          ),
+        ),
     ]);
-  }
-}
-class _AsociadoTile extends StatelessWidget {
-  const _AsociadoTile({required this.a});
-  final ServicioAsociado a;
-
-  String _estado() {
-    if (a.estadoTimer == 'corriendo') return 'En proceso';
-    if (a.estadoTimer == 'cerrado') return 'Cerrada';
-    return '';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // Verde = lo operas tú (pulsable); negro = otro operario (solo informativo).
-    final color = a.esMio ? Colors.green.shade700 : Colors.black87;
-    final estado = _estado();
-    final row = Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(children: [
-        Icon(a.esMio ? Icons.person : Icons.person_outline, size: 18, color: color),
-        const SizedBox(width: 8),
-        Expanded(child: Text(a.recurso,
-            style: TextStyle(color: color, fontWeight: FontWeight.w500))),
-        if (estado.isNotEmpty)
-          Text(estado, style: const TextStyle(color: Colors.black54, fontSize: 12)),
-        if (a.esMio) const Icon(Icons.chevron_right, size: 18, color: Colors.green),
-      ]),
-    );
-    if (!a.esMio) return row; // negro: no navegable
-    return InkWell(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => TaskDetailScreen(taskId: a.id, readOnly: false)),
-      ),
-      child: row,
-    );
   }
 }
 
@@ -599,17 +444,6 @@ class _RecursosSection extends ConsumerStatefulWidget {
   @override
   ConsumerState<_RecursosSection> createState() => _RecursosSectionState();
 
-  Future<void> _cerrar(Recurso r) async {
-    try {
-      final ok = await cerrarRecursoDialog(context, ref, r);
-      if (ok) {
-        ref.invalidate(taskDetailProvider(widget.madreId));
-        ref.invalidate(tasksListProvider);
-      }
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo cerrar: $e')));
-    }
-  }
 }
 
 class _RecursosSectionState extends ConsumerState<_RecursosSection> {
@@ -618,6 +452,11 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
   bool get _detallista {
     final c = ref.read(sessionControllerProvider).profile?.config;
     return c != null && c.mostrarInicioCierre && !c.capturaManualHoras;
+  }
+
+  String _uuid() {
+    final r = math.Random();
+    return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
   }
 
   Future<void> _pausarActivo(int exceptoId) async {
@@ -649,6 +488,20 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
     await _run(() async {
       final (lat, lng) = await bestEffortLocation();
       await _pausarActivo(r.id);                     // concatenación
+
+      // Auto-fichaje de jornada (bloqueo duro): si tiene presencia y no hay
+      // jornada abierta, ficha entrada con la hora informada. Si falla, no inicia.
+      final tieneAttendance =
+          ref.read(sessionControllerProvider).profile?.capabilities.attendance ?? false;
+      if (tieneAttendance) {
+        final estado = await ref.read(attendanceRepoProvider).currentState();
+        if (!estado.hasOpen) {
+          await ref.read(attendanceRepoProvider).checkIn(_uuid(), lat: lat, lng: lng, at: hora);
+          await ref.read(journeyLedgerProvider).clear(); // jornada nueva: libro limpio
+          ref.invalidate(attendanceStateProvider);
+        }
+      }
+
       await ref.read(tasksRepoProvider).start(r.id, lat: lat, lng: lng, informada: hora);
     });
   }
@@ -664,6 +517,17 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
         await ref.read(tasksRepoProvider).pause(r.id, lat: lat, lng: lng);
       });
 
+  Future<void> _cerrar(Recurso r) async {
+        try {
+          final ok = await cerrarRecursoDialog(context, ref, r);
+          if (ok) {
+            ref.invalidate(taskDetailProvider(widget.madreId));
+            ref.invalidate(tasksListProvider);
+          }
+        } catch (e) {
+          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo cerrar: $e')));
+        }
+      }
   @override
   Widget build(BuildContext context) {
     if (widget.recursos.isEmpty) return const SizedBox.shrink();
@@ -715,7 +579,19 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
   List<Widget> _botones(Recurso r) {
     if (_busy) return [const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))];
     if (!r.iniciada) {
-      return [IconButton(icon: const Icon(Icons.play_arrow, color: Colors.green), tooltip: 'Iniciar', onPressed: () => _iniciar(r))];
+      return [
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: Colors.green.shade700,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            minimumSize: const Size(0, 36),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          onPressed: () => _iniciar(r),
+          icon: const Icon(Icons.play_arrow, size: 18),
+          label: const Text('Iniciar'),
+        ),
+      ];
     }
     final acciones = <Widget>[];
     if (_detallista && r.hayTramoAbierto) {
@@ -799,7 +675,12 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r)
     }
   }
   final (lat, lng) = await bestEffortLocation();
+  if (!context.mounted) return false;
   await ref.read(tasksRepoProvider).close(r.id, cierreInformada: cierre, pausa: pausa, modo: modo, lat: lat, lng: lng);
+  // Imputa la pausa declarada al libro de jornada (clave = recurso, para que
+  // reabrir/re-cerrar sobrescriba en vez de duplicar). Se concilia al fichar
+  // salida. La concatenación (_pausarActivo) NO pasa por aquí.
+  await ref.read(journeyLedgerProvider).setDeclared(r.id, pausa);
   return true;
 }
 
@@ -809,26 +690,4 @@ Future<DateTime?> _pickCustom(BuildContext context, DateTime base) async {
   final tm = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(base));
   if (tm == null) return null;
   return DateTime(base.year, base.month, base.day, tm.hour, tm.minute);
-}
-
-/// Pausa/comida del servicio (obligatorio elegir). Devuelve null si cancela.
-Future<double?> pickPausa(BuildContext context) {
-  return showDialog<double>(
-    context: context,
-    barrierDismissible: false,
-    builder: (_) => SimpleDialog(
-      title: const Text('Tiempo de pausa / comida'),
-      children: [
-        for (final opt in const [
-          ('Ninguna', 0.0), ('30 min', 0.5), ('1 hora', 1.0),
-          ('1 h 30 min', 1.5), ('2 horas', 2.0),
-        ])
-          SimpleDialogOption(
-            onPressed: () => Navigator.pop(context, opt.$2),
-            child: Padding(padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(opt.$1, style: const TextStyle(fontSize: 16))),
-          ),
-      ],
-    ),
-  );
 }

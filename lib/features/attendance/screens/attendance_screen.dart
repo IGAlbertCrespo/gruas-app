@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import '../../tasks/tasks_providers.dart';
 import '../attendance_models.dart';
 import '../attendance_repository.dart';
+import '../../../shared/pausa_dialog.dart';
 import '../../../shared/widgets/brand_logo.dart';
 
 /// Resumen de la última jornada cerrada (se muestra hasta el siguiente fichaje).
@@ -19,6 +20,9 @@ class _JourneySummary {
 }
 
 Duration _fromHours(double h) => Duration(milliseconds: (h * 3600000).round());
+
+/// Umbral para ignorar ruido de redondeo en la reconciliación de pausas (~3 min).
+const double _eps = 0.05;
 
 String _hms(Duration d) {
   if (d.isNegative) d = Duration.zero;
@@ -51,6 +55,15 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _hydrateBreakStart();
+  }
+
+  /// Recupera el inicio de la pausa en curso del libro de jornada (persistido),
+  /// para que el contador en vivo no se reinicie al cambiar de pestaña o tras
+  /// un kill de la app.
+  Future<void> _hydrateBreakStart() async {
+    final inicio = await ref.read(journeyLedgerProvider).breakStart();
+    if (mounted && inicio != null) setState(() => _breakStart = inicio);
   }
 
   @override
@@ -64,6 +77,7 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     // Al volver a primer plano, recalculamos (refrescamos el estado).
     if (state == AppLifecycleState.resumed && mounted) {
       ref.invalidate(attendanceStateProvider);
+      _hydrateBreakStart();
       setState(() {});
     }
   }
@@ -120,17 +134,75 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     await _run((repo) async {
       final (lat, lng) = await _location();
       await repo.checkIn(_uuid(), lat: lat, lng: lng);
+      await ref.read(journeyLedgerProvider).clear(); // jornada nueva: libro limpio
     });
   }
 
   Future<void> _checkOut(AttendanceState st) async {
-    final c = _compute(st);
-    final summary = _JourneySummary(
-      st.checkIn!.toLocal(), DateTime.now(), c.bruta, c.pausas, c.efectivas);
+    if (st.checkIn == null) return;
+    final ledger = ref.read(journeyLedgerProvider);
+    final salida = DateTime.now();
+    final inicioJornada = st.checkIn!.toLocal();
+
+    // --- Reconciliación de la pausa de comida (100% local, sin red) ---
+    final declaradas = await ledger.declaredTotal();
+    final fichadas = await ledger.clockedTotal();
+    double forzadaHoras = 0;
+    DateTime? inicioForzada;
+
+    if (!mounted) return;
+    if (declaradas <= _eps && fichadas <= _eps) {
+      // Ni imputada al cliente ni fichada a mano: preguntar si comió y cuánto.
+      forzadaHoras = await pickPausa(context) ?? 0.0; // "Ninguna" => no comió
+    } else {
+      final hueco = declaradas - fichadas;
+      if (hueco > _eps) {
+        final inicio = _proponer1400(inicioJornada, salida, hueco);
+        if (inicio == null) {
+          _avisoNoCabe();
+        } else {
+          if (!mounted) return;
+          if (await confirmIncorporarPausa(context, hueco, inicio)) {
+            forzadaHoras = hueco;
+            inicioForzada = inicio;
+          }
+        }
+      }
+      // hueco <= 0 => ya estaba fichado a mano: no se pregunta ("salvo manual").
+    }
+
+    // Caso 0/0 con "sí comió": proponer también las 14:00.
+    if (forzadaHoras > _eps && inicioForzada == null) {
+      inicioForzada = _proponer1400(inicioJornada, salida, forzadaHoras);
+      if (inicioForzada == null) {
+        _avisoNoCabe();
+        forzadaHoras = 0;
+      }
+    }
+
     setState(() => _busy = true);
     try {
       final (lat, lng) = await _location();
-      await ref.read(attendanceRepoProvider).checkOut(_uuid(), attendanceId: st.attendanceId, lat: lat, lng: lng);
+      // 1) Insertar la pausa forzada ANTES del check-out (asistencia abierta).
+      if (forzadaHoras > _eps && inicioForzada != null) {
+        await ref.read(attendanceRepoProvider).breakForced(
+              _uuid(),
+              start: inicioForzada,
+              durationHours: forzadaHoras,
+              attendanceId: st.attendanceId,
+            );
+      }
+      // 2) Check-out.
+      await ref.read(attendanceRepoProvider)
+          .checkOut(_uuid(), attendanceId: st.attendanceId, lat: lat, lng: lng);
+
+      // 3) Resumen, sumando la pausa forzada (st no la refleja aún).
+      final c = _compute(st);
+      final pausas = c.pausas + (forzadaHoras > _eps ? _fromHours(forzadaHoras) : Duration.zero);
+      final summary = _JourneySummary(
+          inicioJornada, salida, c.bruta, pausas, c.bruta - pausas);
+
+      await ledger.clear();
       _breakStart = null;
       _lastSummary = summary;
       ref.invalidate(attendanceStateProvider);
@@ -139,6 +211,26 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  void _avisoNoCabe() {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('La pausa no cabe en la jornada; revísala en oficina.')));
+    }
+  }
+
+  /// Propone las 14:00 (local) como inicio de la pausa forzada, ajustando para
+  /// que quepa dentro de [entrada, salida]. Devuelve null si la jornada es más
+  /// corta que la pausa. El solape con otras pausas lo arbitra el backend.
+  DateTime? _proponer1400(DateTime inicio, DateTime salida, double horas) {
+    final dur = _fromHours(horas);
+    if (salida.difference(inicio) < dur) return null;
+    var start = DateTime(salida.year, salida.month, salida.day, 14, 0);
+    final maxStart = salida.subtract(dur);
+    if (start.isBefore(inicio)) start = inicio;
+    if (start.isAfter(maxStart)) start = maxStart;
+    return start;
   }
 
   @override
@@ -193,8 +285,10 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
       children: [
         if (!st.isOnBreak)
           _BreakStartButton(busy: _busy, onStart: (typeId) {
-            _breakStart = DateTime.now();
+            final ahora = DateTime.now();
+            _breakStart = ahora;
             _run((repo) async {
+              await ref.read(journeyLedgerProvider).setBreakStart(ahora);
               await repo.breakStart(_uuid(), attendanceId: st.attendanceId, breakTypeId: typeId);
             });
           })
@@ -204,6 +298,14 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
             onPressed: _busy ? null : () {
               _breakStart = null;
               _run((repo) async {
+                // Pausa fichada => acumula su duración (restará del hueco al cerrar).
+                final ledger = ref.read(journeyLedgerProvider);
+                final inicio = await ledger.breakStart();
+                if (inicio != null) {
+                  final dur = DateTime.now().difference(inicio).inMilliseconds / 3600000.0;
+                  await ledger.addClocked(dur);
+                }
+                await ledger.clearBreakStart();
                 await repo.breakEnd(_uuid(), breakId: st.currentBreakId, attendanceId: st.attendanceId);
               });
             },

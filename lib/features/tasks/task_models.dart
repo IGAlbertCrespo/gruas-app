@@ -131,12 +131,14 @@ class Recurso {
   final double servicioMinimo;
   final bool incidencia;
   final DateTime? aperturaInformada;
+  final bool aplicarMinimo;
 
   const Recurso({
     required this.id, required this.recurso, this.empleado,
     required this.esMio, required this.iniciada, required this.cerrada,
     required this.hayTramoAbierto, required this.horasFacturar,
     required this.servicioMinimo, required this.incidencia,
+    this.aperturaInformada, required this.aplicarMinimo,
   });
 
   factory Recurso.fromJson(Map<String, dynamic> j) => Recurso(
@@ -151,32 +153,10 @@ class Recurso {
         servicioMinimo: (j['servicio_minimo'] as num?)?.toDouble() ?? 0.0,
         incidencia: j['incidencia'] == true,
         aperturaInformada: parseOdooDt(j['apertura_informada']?.toString()),
+        aplicarMinimo: j['aplicar_minimo'] == true,
       );
 }
 
-class ServicioAsociado {
-  final int id;
-  final String recurso;
-  final String naturaleza;   // operable
-  final bool esMio;
-  final String estadoTimer;  // sin_iniciar | corriendo | cerrado
-
-  const ServicioAsociado({
-    required this.id,
-    required this.recurso,
-    required this.naturaleza,
-    required this.esMio,
-    required this.estadoTimer,
-  });
-
-  factory ServicioAsociado.fromJson(Map<String, dynamic> j) => ServicioAsociado(
-        id: (j['id'] as num).toInt(),
-        recurso: j['recurso']?.toString() ?? '',
-        naturaleza: j['naturaleza']?.toString() ?? 'operable',
-        esMio: j['es_mio'] == true,
-        estadoTimer: j['estado_timer']?.toString() ?? 'sin_iniciar',
-      );
-}
 
 class Accesorio {
   final String recurso;
@@ -210,7 +190,6 @@ class TaskDetail extends TaskSummary {
   final Address carga;
   final Address descarga;
   final Worksheet worksheet;
-  final List<ServicioAsociado> serviciosAsociados;
   final List<Accesorio> accesorios;
   final DateTime? aperturaHora;
   final DateTime? aperturaInformada;
@@ -243,7 +222,6 @@ class TaskDetail extends TaskSummary {
     this.cierreInformada,
     this.notasChofer,
     this.descripcionServicio,
-    this.serviciosAsociados = const [],
     this.accesorios = const [],
     this.tramos = const [],
     this.recursos = const [],
@@ -273,9 +251,6 @@ class TaskDetail extends TaskSummary {
       carga: Address.fromJson((j['carga'] ?? {}) as Map<String, dynamic>),
       descarga: Address.fromJson((j['descarga'] ?? {}) as Map<String, dynamic>),
       worksheet: Worksheet.fromJson((j['worksheet'] ?? {}) as Map<String, dynamic>),
-      serviciosAsociados: ((j['servicios_asociados'] ?? []) as List)
-          .map((e) => ServicioAsociado.fromJson(e as Map<String, dynamic>))
-          .toList(),
       accesorios: ((j['accesorios'] ?? []) as List)
           .map((e) => Accesorio.fromJson(e as Map<String, dynamic>))
           .toList(),

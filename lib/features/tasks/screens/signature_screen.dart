@@ -6,10 +6,11 @@ import 'package:signature/signature.dart';
 import '../../../shared/location.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
+import 'task_detail_screen.dart'; // cerrarRecursoDialog (función top-level)
 
-/// Firma del cliente. Muestra lo que el cliente acepta: horas a facturar (o
-/// "Servicio mínimo", o aviso si aún no está cerrada), observaciones editables,
-/// nombre y firma. Una vez firmada, no se puede volver a firmar ni editar.
+/// Firma del servicio. Muestra el resumen de todos los recursos (editable),
+/// observaciones del cliente, y la firma. Al confirmar: guarda firma + finaliza
+/// la madre (arrastra hijas). Una vez firmada, solo lectura.
 class SignatureScreen extends ConsumerStatefulWidget {
   const SignatureScreen({super.key, required this.task});
   final TaskDetail task;
@@ -19,12 +20,9 @@ class SignatureScreen extends ConsumerStatefulWidget {
 
 class _SignatureScreenState extends ConsumerState<SignatureScreen> {
   final _controller = SignatureController(penStrokeWidth: 3, penColor: Colors.black);
-  late final TextEditingController _signer =
-      TextEditingController(text: widget.task.worksheet.identificacionSig ?? '');
-  late final TextEditingController _dni =
-      TextEditingController(text: widget.task.worksheet.dniSig ?? '');
-  late final TextEditingController _obs =
-      TextEditingController(text: widget.task.worksheet.obsCliente ?? '');
+  final _signer = TextEditingController();          // antes: text: ...identificacionSig
+  final _dni = TextEditingController();              // antes: text: ...dniSig
+  late final _obs = TextEditingController(text: widget.task.worksheet.obsCliente ?? '');
   bool _busy = false;
 
   @override
@@ -36,29 +34,65 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
     super.dispose();
   }
 
-  Widget _kv(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          SizedBox(width: 110, child: Text(k, style: const TextStyle(color: Colors.black54))),
-          Expanded(child: Text(v)),
-        ]),
-      );
+  Future<void> _editarRecurso(Recurso r) async {
+    try {
+      final ok = await cerrarRecursoDialog(context, ref, r);
+      if (ok) ref.invalidate(taskDetailProvider(widget.task.id));
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo editar: $e')));
+    }
+  }
 
-  Future<void> _save() async {
-    if (_controller.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Falta la firma.')));
+  bool _dniValido(String s) {
+    final t = s.trim().toUpperCase();
+    if (!RegExp(r'^\d{8}[A-Z]$').hasMatch(t)) return false;
+    const letras = 'TRWAGMYFPDXBNJZSQVHLCKE';
+    final num = int.parse(t.substring(0, 8));
+    return letras[num % 23] == t[8];
+  }
+
+  Future<void> _firmarYFinalizar() async {
+    final hayFirma = !_controller.isEmpty;
+    final hayNombre = _signer.text.trim().isNotEmpty;
+    final dni = _dni.text.trim();
+    final hayDni = dni.isNotEmpty;
+
+    // Mínimo 2 de 3: firma / nombre / DNI.
+    final n = [hayFirma, hayNombre, hayDni].where((b) => b).length;
+    if (n < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Indica al menos dos datos: firma, nombre o DNI.')));
       return;
     }
-    // Refrendo: el cliente confirma de nuevo antes de fijar la firma.
+
+    // DNI mal formado: avisamos pero permitimos (puede ser NIE/extranjero).
+    if (hayDni && !_dniValido(dni)) {
+      final seguir = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('DNI no estándar'),
+          content: const Text('El DNI introducido no tiene el formato español habitual '
+              '(8 cifras + letra). Si es un documento extranjero (NIE/pasaporte) es normal. '
+              '¿Continuar de todos modos?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Revisar')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Continuar')),
+          ],
+        ),
+      );
+      if (seguir != true) return;
+    }
+
+    // #4 — confirmación simple
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Confirmar firma'),
-        content: const Text('¿Estás de acuerdo con los datos y la firma? '
-            'Una vez confirmada no podrá modificarse.'),
+        content: const Text('¿Confirma los datos introducidos?\n\n'
+            'Una tarea finalizada ya no es modificable.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Revisar')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Sí, firmar')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Confirmar')),
         ],
       ),
     );
@@ -69,16 +103,18 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
       final bytes = await _controller.toPngBytes();
       if (bytes == null) throw Exception('No se pudo generar la imagen.');
       final (lat, lng) = await bestEffortLocation();
-      await ref.read(tasksRepoProvider).saveSignature(
-            widget.task.id,
-            base64Encode(bytes),
-            signerName: _signer.text.trim().isEmpty ? null : _signer.text.trim(),
-            dni: _dni.text.trim(),
-            obsCliente: _obs.text.trim(),
-            lat: lat,
-            lng: lng,
-          );
+      final repo = ref.read(tasksRepoProvider);
+      await repo.saveSignature(
+        widget.task.id,
+        base64Encode(bytes),
+        signerName: _signer.text.trim().isEmpty ? null : _signer.text.trim(),
+        dni: _dni.text.trim(),
+        obsCliente: _obs.text.trim(),
+        lat: lat, lng: lng,
+      );
+      await repo.finalize(widget.task.id, lat: lat, lng: lng); // mueve la madre a Finalizada
       ref.invalidate(taskDetailProvider(widget.task.id));
+      ref.invalidate(tasksListProvider);
       if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
@@ -89,84 +125,40 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.task.hasSignature) {
-      final w = widget.task.worksheet;
-      Widget? img;
-      final b64 = w.signatureBase64;
-      if (b64 != null && b64.isNotEmpty) {
-        try {
-          img = Image.memory(base64Decode(b64), height: 160, fit: BoxFit.contain);
-        } catch (_) {
-          img = null;
-        }
-      }
-      return Scaffold(
-        appBar: AppBar(title: const Text('Firma del cliente')),
-        body: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Row(children: [
-              Icon(Icons.verified, color: Colors.green.shade700),
-              const SizedBox(width: 8),
-              const Text('Tarea firmada', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            ]),
-            const SizedBox(height: 16),
-            if ((w.identificacionSig ?? '').isNotEmpty) _kv('Firmante', w.identificacionSig!),
-            if ((w.dniSig ?? '').isNotEmpty) _kv('DNI', w.dniSig!),
-            if (w.firmaHora != null)
-              _kv('Fecha/Hora', w.firmaHora!.toLocal().toString().substring(0, 16)),
-            if ((w.obsCliente ?? '').isNotEmpty) _kv('Obs. cliente', w.obsCliente!),
-            const SizedBox(height: 16),
-            const Text('Firma:', style: TextStyle(color: Colors.black54)),
-            const SizedBox(height: 6),
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: Colors.black26),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: img ?? const Padding(
-                padding: EdgeInsets.all(24),
-                child: Center(child: Text('Firma no disponible para mostrar.')),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
+    // Madre fresca: refleja las ediciones de recursos hechas aquí.
+    final t = ref.watch(taskDetailProvider(widget.task.id)).valueOrNull ?? widget.task;
+    if (t.hasSignature) return _vistaFirmada(t);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Firma del cliente'),
-        actions: [IconButton(onPressed: () => _controller.clear(), icon: const Icon(Icons.clear))],
-      ),
+      appBar: AppBar(title: const Text('Firmar servicio')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _HoursBanner(task: widget.task),
+          const Text('Resumen del servicio', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          const SizedBox(height: 8),
+          for (final r in t.recursos) _filaResumen(r),
+          const Divider(height: 24),
+          TextField(controller: _obs, maxLines: 2,
+              decoration: const InputDecoration(labelText: 'Observaciones del cliente')),
           const SizedBox(height: 12),
-          TextField(
-            controller: _obs,
-            maxLines: 2,
-            decoration: const InputDecoration(labelText: 'Observaciones del cliente'),
-          ),
+          TextField(controller: _signer,
+              decoration: const InputDecoration(labelText: 'Nombre de quien firma')),
           const SizedBox(height: 12),
-          TextField(
-            controller: _signer,
-            decoration: const InputDecoration(labelText: 'Nombre de quien firma'),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _dni,
-            textCapitalization: TextCapitalization.characters,
-            decoration: const InputDecoration(labelText: 'DNI de quien firma'),
-          ),
-          const SizedBox(height: 12),
-          const Text('Firma:', style: TextStyle(color: Colors.black54)),
+          TextField(controller: _dni, textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(labelText: 'DNI de quien firma')),
+          const SizedBox(height: 16),
+          Row(children: [
+            const Text('Firma:', style: TextStyle(color: Colors.black54)),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: () => _controller.clear(),
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('Borrar'),
+            ),
+          ]),
           const SizedBox(height: 6),
           Container(
-            height: 220,
+            height: 170,                              // antes 220
             decoration: BoxDecoration(
               color: Colors.white,
               border: Border.all(color: Colors.black26),
@@ -176,44 +168,88 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           ),
           const SizedBox(height: 16),
           FilledButton.icon(
-            onPressed: _busy ? null : _save,
+            onPressed: _busy ? null : _firmarYFinalizar,
             icon: _busy
                 ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.check),
-            label: const Text('Firmar'),
+            label: const Text('Confirmar y firmar'),
           ),
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 24),  // ← aire bajo la barra del móvil
         ],
       ),
     );
   }
-}
 
-/// Aviso de horas que ve el cliente al firmar.
-class _HoursBanner extends StatelessWidget {
-  const _HoursBanner({required this.task});
-  final TaskDetail task;
-  @override
-  Widget build(BuildContext context) {
-    final finalizada = task.cerrada || task.stage.alias == 'Finalizada';
-    final (IconData icon, Color color, String text) = !finalizada
-        ? (Icons.hourglass_empty, Colors.orange.shade800,
-            'El cómputo de horas aún no está calculado (tarea sin finalizar).')
-        : task.worksheet.aplicarMinimo
-            ? (Icons.lock_clock, Colors.indigo, 'Servicio mínimo')
-            : (Icons.schedule, Colors.green.shade700,
-                'Horas a facturar: ${task.worksheet.horasFacturar.toStringAsFixed(1)} h');
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
+  Widget _filaResumen(Recurso r) {
+    final fact = r.aplicarMinimo ? 'Mínimo' : '${r.horasFacturar.toStringAsFixed(1)} h';
+    return InkWell(
+      onTap: r.esMio ? () => _editarRecurso(r) : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(children: [
+          Expanded(child: Text(r.recurso)),
+          if (r.incidencia)
+            Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(6)),
+              child: Text('Incidencia', style: TextStyle(color: Colors.red.shade700, fontSize: 11)),
+            ),
+          Text(fact, style: const TextStyle(fontWeight: FontWeight.w600)),
+          if (r.esMio) const Padding(
+            padding: EdgeInsets.only(left: 6),
+            child: Icon(Icons.edit, size: 16, color: Colors.black38),
+          ),
+        ]),
       ),
-      child: Row(children: [
-        Icon(icon, color: color),
-        const SizedBox(width: 10),
-        Expanded(child: Text(text, style: TextStyle(color: color, fontWeight: FontWeight.w600))),
+    );
+  }
+
+  Widget _kv(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          SizedBox(width: 110, child: Text(k, style: const TextStyle(color: Colors.black54))),
+          Expanded(child: Text(v)),
+        ]),
+      );
+
+  Widget _vistaFirmada(TaskDetail t) {
+    final w = t.worksheet;
+    Widget? img;
+    final b64 = w.signatureBase64;
+    if (b64 != null && b64.isNotEmpty) {
+      try {
+        img = Image.memory(base64Decode(b64), height: 160, fit: BoxFit.contain);
+      } catch (_) {
+        img = null;
+      }
+    }
+    return Scaffold(
+      appBar: AppBar(title: const Text('Firma del cliente')),
+      body: ListView(padding: const EdgeInsets.all(16), children: [
+        Row(children: [
+          Icon(Icons.verified, color: Colors.green.shade700),
+          const SizedBox(width: 8),
+          const Text('Servicio firmado', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        ]),
+        const SizedBox(height: 16),
+        if ((w.identificacionSig ?? '').isNotEmpty) _kv('Firmante', w.identificacionSig!),
+        if ((w.dniSig ?? '').isNotEmpty) _kv('DNI', w.dniSig!),
+        if (w.firmaHora != null) _kv('Fecha/Hora', w.firmaHora!.toLocal().toString().substring(0, 16)),
+        if ((w.obsCliente ?? '').isNotEmpty) _kv('Obs. cliente', w.obsCliente!),
+        const SizedBox(height: 16),
+        const Text('Firma:', style: TextStyle(color: Colors.black54)),
+        const SizedBox(height: 6),
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: Colors.black26),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: img ?? const Padding(padding: EdgeInsets.all(24),
+              child: Center(child: Text('Firma no disponible.'))),
+        ),
       ]),
     );
   }
