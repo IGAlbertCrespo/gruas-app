@@ -1,693 +1,489 @@
-import 'dart:math' as math;
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 
-import '../../../shared/location.dart';
+import '../../tasks/tasks_providers.dart';
+import '../attendance_models.dart';
+import '../attendance_repository.dart';
 import '../../../shared/pausa_dialog.dart';
-import '../../auth/session_controller.dart';
-import '../task_models.dart';
-import '../tasks_providers.dart';
-import 'signature_screen.dart';
-import 'package:url_launcher/url_launcher.dart';
+import '../../../shared/widgets/brand_logo.dart';
 
-
-class TaskDetailScreen extends ConsumerStatefulWidget {
-  const TaskDetailScreen({super.key, required this.taskId, this.readOnly = false});
-  final int taskId;
-  final bool readOnly;
-
-  @override
-  ConsumerState<TaskDetailScreen> createState() => _TaskDetailScreenState();
+/// Resumen de la última jornada cerrada (se muestra hasta el siguiente fichaje).
+class _JourneySummary {
+  final DateTime entrada;
+  final DateTime salida;
+  final Duration bruta;
+  final Duration pausas;
+  final Duration efectivas;
+  final String? obs;
+  const _JourneySummary(this.entrada, this.salida, this.bruta, this.pausas, this.efectivas, {this.obs});
 }
 
-class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
-  bool _notesShown = false;
+Duration _fromHours(double h) => Duration(milliseconds: (h * 3600000).round());
+
+/// Umbral para ignorar ruido de redondeo en la reconciliación de pausas (~3 min).
+const double _eps = 0.05;
+
+String _hms(Duration d) {
+  if (d.isNegative) d = Duration.zero;
+  final h = d.inHours, m = d.inMinutes % 60, s = d.inSeconds % 60;
+  return '${h}h ${m.toString().padLeft(2, '0')}m ${s.toString().padLeft(2, '0')}s';
+}
+
+String _hm(DateTime dt) {
+  final l = dt.toLocal();
+  return '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
+}
+
+String _dmy(DateTime dt) {
+  final l = dt.toLocal();
+  return '${l.day.toString().padLeft(2, '0')}/${l.month.toString().padLeft(2, '0')}/${(l.year % 100).toString().padLeft(2, '0')}';
+}
+
+class AttendanceScreen extends ConsumerStatefulWidget {
+  const AttendanceScreen({super.key});
+  @override
+  ConsumerState<AttendanceScreen> createState() => _AttendanceScreenState();
+}
+
+class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with WidgetsBindingObserver {
   bool _busy = false;
+  DateTime? _breakStart; // inicio de la pausa en curso (lo conoce la app)
+  _JourneySummary? _lastSummary;
 
   @override
-  Widget build(BuildContext context) {
-    final async = ref.watch(taskDetailProvider(widget.taskId));
-
-    // Popup automático de notas del chófer al abrir, si las hay.
-    ref.listen(taskDetailProvider(widget.taskId), (prev, next) {
-      final t = next.asData?.value;
-      if (t != null && !_notesShown && (t.notasChofer?.trim().isNotEmpty ?? false)) {
-        _notesShown = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) => _showNotes(t.notasChofer!));
-      }
-    });
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Servicio'),
-        actions: [
-          async.maybeWhen(
-            data: (t) => IconButton(
-              tooltip: 'Notas del chófer',
-              icon: const Icon(Icons.sticky_note_2_outlined),
-              onPressed: () => _showNotes(t.notasChofer ?? ''),
-            ),
-            orElse: () => const SizedBox.shrink(),
-          ),
-        ],
-      ),
-      body: async.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('$e')),
-        data: (t) => _Body(task: t),
-      ),
-      bottomNavigationBar: widget.readOnly
-          ? null
-          : async.maybeWhen(
-              data: (t) => _actionsBar(t),
-              orElse: () => null,
-            ),
-    );
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _hydrateBreakStart();
   }
 
-  // ---------- Notas ----------
-  void _showNotes(String notas) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Row(children: [
-          Icon(Icons.sticky_note_2_outlined),
-          SizedBox(width: 8),
-          Text('Notas del chófer'),
-        ]),
-        content: SingleChildScrollView(
-          child: Text(notas.trim().isEmpty ? 'Sin notas.' : notas),
-        ),
-        actions: [
-          if (!widget.readOnly)
-            TextButton.icon(
-              onPressed: () {
-                Navigator.pop(context);
-                _addComment();
-              },
-              icon: const Icon(Icons.add_comment),
-              label: const Text('Añadir comentario'),
-            ),
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cerrar')),
-        ],
-      ),
-    );
+  /// Recupera el inicio de la pausa en curso del libro de jornada (persistido),
+  /// para que el contador en vivo no se reinicie al cambiar de pestaña o tras
+  /// un kill de la app.
+  Future<void> _hydrateBreakStart() async {
+    final inicio = await ref.read(journeyLedgerProvider).breakStart();
+    if (mounted && inicio != null) setState(() => _breakStart = inicio);
   }
-
-  Future<void> _addComment() async {
-    final ctrl = TextEditingController();
-    final text = await showDialog<String>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Añadir comentario'),
-        content: TextField(
-          controller: ctrl,
-          maxLines: 4,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Tu comentario…'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, ctrl.text.trim()),
-            child: const Text('Añadir'),
-          ),
-        ],
-      ),
-    );
-    if (text == null || text.isEmpty) return;
-    try {
-      await ref.read(tasksRepoProvider).addNote(widget.taskId, text);
-      ref.invalidate(taskDetailProvider(widget.taskId));
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-    }
-  }
-
-  // ---------- Acciones ----------
-
-  Widget? _actionsBar(TaskDetail t) {
-    final parts = <Widget>[];
-    if (t.hasSignature) {
-      parts.add(OutlinedButton.icon(
-        onPressed: () => Navigator.push(context,
-            MaterialPageRoute(builder: (_) => SignatureScreen(task: t))),
-        icon: const Icon(Icons.visibility),
-        label: const Text('Ver firma'),
-      ));
-    }
-    if (t.stage.alias != 'Finalizada') {
-      parts.add(FilledButton.icon(
-        style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
-        onPressed: _busy ? null : () => _finalizarTarea(t),
-        icon: const Icon(Icons.check_circle),
-        label: const Text('Finalizar tarea'),
-      ));
-    }
-    if (parts.isEmpty) return null;
-    final row = <Widget>[];
-    for (var i = 0; i < parts.length; i++) {
-      if (i > 0) row.add(const SizedBox(width: 8));
-      row.add(Expanded(child: parts[i]));
-    }
-    return SafeArea(child: Padding(padding: const EdgeInsets.all(12), child: Row(children: row)));
-  }
-
-  Future<void> _finalizarTarea(TaskDetail t) async {
-    // 1) Cerrar MIS recursos pendientes (iniciados y sin cerrar), reusando 3a.
-    final pendientes = t.recursos.where((r) => r.esMio && r.iniciada && !r.cerrada).toList();
-    for (final r in pendientes) {
-      final ok = await cerrarRecursoDialog(context, ref, r);
-      if (!ok || !mounted) return; // canceló uno → aborta finalización
-    }
-    ref.invalidate(taskDetailProvider(t.id));
-    // 2) Ir a la pantalla de resumen/firma con la madre fresca.
-    final fresh = await ref.read(tasksRepoProvider).detail(t.id);
-    if (!mounted) return;
-    await Navigator.push(context, MaterialPageRoute(builder: (_) => SignatureScreen(task: fresh)));
-    ref.invalidate(taskDetailProvider(t.id));
-    ref.invalidate(tasksListProvider);
-  }
-
-
-
-  Future<void> _reopen(TaskDetail t) async {
-    setState(() => _busy = true);
-    try {
-      await ref.read(tasksRepoProvider).reopen(t.id);
-      // Al reabrir, retira del libro las pausas imputadas de sus recursos para
-      // que no cuenten si la tarea ya no se vuelve a cerrar.
-      for (final r in t.recursos) {
-        await ref.read(journeyLedgerProvider).removeDeclared(r.id);
-      }
-      ref.invalidate(taskDetailProvider(t.id));
-      ref.invalidate(tasksListProvider);
-    } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  }
-
-// ============================ Cuerpo (presentación) ============================
-class _Body extends ConsumerWidget {            // ← era StatelessWidget
-  const _Body({required this.task});
-  final TaskDetail task;                          // ← SOLO task como campo. NADA de mostrarReales aquí.
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {   // ← añade WidgetRef ref
-    final scheme = Theme.of(context).colorScheme;
-    final mostrarReales =                          // ← AQUÍ, variable LOCAL dentro de build
-        ref.read(sessionControllerProvider).profile?.config.mostrarHorasReales ?? false;
-
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        // Cabecera
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Text(task.name,
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            ),
-            _StageChip(alias: task.stage.alias, name: task.stage.name),
-          ],
-        ),
-        const SizedBox(height: 8),
-        Wrap(spacing: 8, runSpacing: 4, children: [
-          if (task.recargo != null)
-            _Tag(icon: Icons.bolt, label: task.recargo!, color: Colors.deepPurple),
-          if (task.iniciada)
-            _Tag(icon: Icons.play_circle, label: 'Iniciada', color: Colors.blue),
-          if (task.hasSignature)
-            _Tag(icon: Icons.draw, label: 'Firmada', color: Colors.green),
-        ]),
-        const SizedBox(height: 8),
-
-        _Section(icon: Icons.event, title: 'Servicio', color: scheme.primary, rows: [
-          if (task.fechaServicio != null)
-            _kv('Fecha/Hora', task.fechaServicio!.toLocal().toString().substring(0, 16)),
-          if (task.vehicle != null) _kv('Vehículo', task.vehicle!),
-          if (task.albaran != null) _kv('Albarán', task.albaran!),
-          if (task.horaSalida != null)
-            _kv('Salida', task.horaSalida!.toLocal().toString().substring(0, 16)),
-          if (task.aperturaHora != null)
-            _kv('Inicio', task.aperturaHora!.toLocal().toString().substring(0, 16)),
-          if (task.cierreHora != null)
-            _kv('Cierre', task.cierreHora!.toLocal().toString().substring(0, 16)),
-        ]),
-
-        _RecursosSection(madreId: task.id, recursos: task.recursos),
-
-        if (task.accesorios.isNotEmpty)
-          _Section(icon: Icons.handyman, title: 'Accesorios a cargar',
-              color: scheme.primary, rows: [
-            for (final acc in task.accesorios) _AccesorioTile(acc: acc),
-          ]),
-        _AddressCard(title: 'Carga', icon: Icons.upload, color: Colors.orange.shade800, a: task.carga),
-        _AddressCard(title: 'Descarga', icon: Icons.download, color: Colors.teal.shade700, a: task.descarga),
-
-        if ((task.descripcionServicio ?? '').trim().isNotEmpty)
-          _Section(icon: Icons.notes, title: 'Observaciones del Servicio', color: scheme.primary, rows: [
-            Text(task.descripcionServicio!.trim()),
-          ]),
-
-        _Section(icon: Icons.assignment_turned_in, title: 'Hoja de trabajo', color: scheme.primary, rows: [
-          if (mostrarReales)
-            _kv('Horas reales', task.worksheet.horasReales.toStringAsFixed(2)),
-          if (task.worksheet.pausaServicio > 0)
-            _kv('Pausa', '${task.worksheet.pausaServicio.toStringAsFixed(1)} h'),
-          if (task.worksheet.aplicarMinimo)
-            _kv('Facturación', 'Servicio mínimo')
-          else
-            _kv('Horas a facturar', task.worksheet.horasFacturar.toStringAsFixed(2)),
-          if ((task.worksheet.obsAlbaran ?? '').isNotEmpty) _kv('Obs. albarán', task.worksheet.obsAlbaran!),
-          if ((task.worksheet.obsCliente ?? '').isNotEmpty) _kv('Obs. cliente', task.worksheet.obsCliente!),
-          _kv('Firma', task.worksheet.hasSignature ? '✔ recogida' : '— pendiente'),
-        ]),
-        const SizedBox(height: 80),
-      ],
-    );
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
   }
-}
 
-Widget _kv(String k, String v) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 120, child: Text(k, style: const TextStyle(color: Colors.black54))),
-        Expanded(child: Text(v)),
-      ]),
-    );
-
-class _Section extends StatelessWidget {
-  const _Section({required this.icon, required this.title, required this.color, required this.rows});
-  final IconData icon;
-  final String title;
-  final Color color;
-  final List<Widget> rows;
   @override
-  Widget build(BuildContext context) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(children: [
-              Icon(icon, size: 18, color: color),
-              const SizedBox(width: 8),
-              Text(title, style: TextStyle(fontWeight: FontWeight.bold, color: color)),
-            ]),
-            const SizedBox(height: 8),
-            ...rows,
-          ]),
-        ),
-      );
-}
-
-class _AddressCard extends StatelessWidget {
-  const _AddressCard({required this.title, required this.icon, required this.color, required this.a});
-  final String title;
-  final IconData icon;
-  final Color color;
-  final Address a;
-
-  Future<void> _abrirMaps(BuildContext context, String url) async {
-    final uri = Uri.tryParse(url);
-    if (uri == null) return;
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir el mapa.')));
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Al volver a primer plano, recalculamos (refrescamos el estado).
+    if (state == AppLifecycleState.resumed && mounted) {
+      ref.invalidate(attendanceStateProvider);
+      _hydrateBreakStart();
+      setState(() {});
     }
-  }
-
-  /// Abre el marcador con el número precargado (un toque para llamar).
-  /// Normaliza el número a dígitos y '+' por si Odoo lo trae con espacios.
-  Future<void> _llamar(BuildContext context, String numero) async {
-    final tel = numero.replaceAll(RegExp(r'[^0-9+]'), '');
-    if (tel.isEmpty) return;
-    final uri = Uri.parse('tel:$tel');
-    final ok = await launchUrl(uri);
-    if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No se pudo abrir el marcador.')));
-    }
-  }
-
-  /// Fila de teléfono pulsable, con el mismo layout etiqueta/valor que _kv.
-  Widget _telRow(BuildContext context, String numero) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const SizedBox(
-            width: 120,
-            child: Text('Teléfono', style: TextStyle(color: Colors.black54)),
-          ),
-          Expanded(
-            child: InkWell(
-              onTap: () => _llamar(context, numero),
-              borderRadius: BorderRadius.circular(4),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 2),
-                child: Row(children: [
-                  const Icon(Icons.phone, size: 16, color: Colors.blue),
-                  const SizedBox(width: 6),
-                  Flexible(child: Text(numero, style: const TextStyle(color: Colors.blue))),
-                ]),
-              ),
-            ),
-          ),
-        ]),
-      );
-
-  @override
-  Widget build(BuildContext context) {
-    final lines = [a.direccion, a.poblacion, a.codigoPostal].where((e) => (e ?? '').isNotEmpty).join(', ');
-    return _Section(icon: icon, title: title, color: color, rows: [
-      if (lines.isNotEmpty) _kv('Dirección', lines),
-      if ((a.contacto ?? '').isNotEmpty) _kv('Contacto', a.contacto!),
-      if ((a.telefono ?? '').isNotEmpty) _telRow(context, a.telefono!),
-      if ((a.url ?? '').isNotEmpty)
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            onPressed: () => _abrirMaps(context, a.url!),
-            icon: const Icon(Icons.map, size: 18),
-            label: const Text('Ver en Maps'),
-          ),
-        ),
-    ]);
-  }
-}
-
-class _AccesorioTile extends StatelessWidget {
-  const _AccesorioTile({required this.acc});
-  final Accesorio acc;
-  @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Row(children: [
-          const Icon(Icons.handyman, size: 18, color: Colors.brown),
-          const SizedBox(width: 8),
-          Expanded(child: Text(acc.recurso)),
-          Text('×${acc.cantidad}', style: const TextStyle(color: Colors.black54)),
-        ]),
-      );
-}
-
-class _StageChip extends StatelessWidget {
-  const _StageChip({required this.alias, required this.name});
-  final String? alias;
-  final String name;
-  @override
-  Widget build(BuildContext context) {
-    final color = switch (alias) {
-      'Finalizada' => Colors.green,
-      'Informado' => Colors.blue,
-      _ => Colors.grey,
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
-      ),
-      child: Text(name, style: TextStyle(color: color, fontWeight: FontWeight.w600, fontSize: 12)),
-    );
-  }
-}
-
-class _Tag extends StatelessWidget {
-  const _Tag({required this.icon, required this.label, required this.color});
-  final IconData icon;
-  final String label;
-  final Color color;
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.10),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, size: 14, color: color),
-          const SizedBox(width: 4),
-          Text(label, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
-        ]),
-      );
-}
-class _RecursosSection extends ConsumerStatefulWidget {
-  const _RecursosSection({required this.madreId, required this.recursos});
-  final int madreId;
-  final List<Recurso> recursos;
-  @override
-  ConsumerState<_RecursosSection> createState() => _RecursosSectionState();
-
-}
-
-class _RecursosSectionState extends ConsumerState<_RecursosSection> {
-  bool _busy = false;
-
-  bool get _detallista {
-    final c = ref.read(sessionControllerProvider).profile?.config;
-    return c != null && c.mostrarInicioCierre && !c.capturaManualHoras;
   }
 
   String _uuid() {
-    final r = math.Random();
+    final r = Random();
     return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
   }
 
-  Future<void> _pausarActivo(int exceptoId) async {
-    for (final r in widget.recursos) {
-      if (r.esMio && r.hayTramoAbierto && r.id != exceptoId) {
-        await ref.read(tasksRepoProvider).pause(r.id);
+  Future<(double?, double?)> _location() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) return (null, null);
+      var perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+        return (null, null);
       }
+      final pos = await Geolocator.getCurrentPosition().timeout(const Duration(seconds: 5));
+      return (pos.latitude, pos.longitude);
+    } catch (_) {
+      return (null, null);
     }
   }
 
-  Future<void> _run(Future<void> Function() body) async {
+  Future<void> _run(Future<void> Function(AttendanceRepository repo) action) async {
     setState(() => _busy = true);
     try {
-      await body();
-      ref.invalidate(taskDetailProvider(widget.madreId));
-      ref.invalidate(tasksListProvider);
+      await action(ref.read(attendanceRepoProvider));
+      ref.invalidate(attendanceStateProvider);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _iniciar(Recurso r) async {
-    final hora = await pickFriendlyTime(context);   // primer inicio: hora ajustable
-    if (hora == null) return;
-    await _run(() async {
-      final (lat, lng) = await bestEffortLocation();
-      await _pausarActivo(r.id);                     // concatenación
+  ({Duration bruta, Duration pausas, Duration efectivas}) _compute(AttendanceState st) {
+    if (!st.hasOpen || st.checkIn == null) {
+      return (bruta: Duration.zero, pausas: Duration.zero, efectivas: Duration.zero);
+    }
+    final now = DateTime.now();
+    final bruta = now.difference(st.checkIn!);
+    final cerradas = _fromHours(st.totalBreakTime);
+    final enCurso = (st.isOnBreak && _breakStart != null) ? now.difference(_breakStart!) : Duration.zero;
+    final pausas = cerradas + enCurso;
+    return (bruta: bruta, pausas: pausas, efectivas: bruta - pausas);
+  }
 
-      // Auto-fichaje de jornada (bloqueo duro): si tiene presencia y no hay
-      // jornada abierta, ficha entrada con la hora informada. Si falla, no inicia.
-      final tieneAttendance =
-          ref.read(sessionControllerProvider).profile?.capabilities.attendance ?? false;
-      if (tieneAttendance) {
-        final estado = await ref.read(attendanceRepoProvider).currentState();
-        if (!estado.hasOpen) {
-          await ref.read(attendanceRepoProvider).checkIn(_uuid(), lat: lat, lng: lng, at: hora);
-          await ref.read(journeyLedgerProvider).clear(); // jornada nueva: libro limpio
-          ref.invalidate(attendanceStateProvider);
-        }
-      }
-
-      await ref.read(tasksRepoProvider).start(r.id, lat: lat, lng: lng, informada: hora);
+  Future<void> _checkIn() async {
+    setState(() {
+      _lastSummary = null;
+      _breakStart = null;
+    });
+    await _run((repo) async {
+      final (lat, lng) = await _location();
+      await repo.checkIn(_uuid(), lat: lat, lng: lng);
+      await ref.read(journeyLedgerProvider).clear(); // jornada nueva: libro limpio
     });
   }
 
-  Future<void> _reanudar(Recurso r) => _run(() async {
-        final (lat, lng) = await bestEffortLocation();
-        await _pausarActivo(r.id);                   // concatenación
-        await ref.read(tasksRepoProvider).start(r.id, lat: lat, lng: lng); // sin hora
-      });
+  Future<void> _checkOut(AttendanceState st) async {
+    if (st.checkIn == null) return;
+    final ledger = ref.read(journeyLedgerProvider);
+    final salida = DateTime.now();
+    final inicioJornada = st.checkIn!.toLocal();
 
-  Future<void> _pausar(Recurso r) => _run(() async {
-        final (lat, lng) = await bestEffortLocation();
-        await ref.read(tasksRepoProvider).pause(r.id, lat: lat, lng: lng);
-      });
+    // --- Reconciliación de la pausa de comida (100% local, sin red) ---
+    final declaradas = await ledger.declaredTotal();
+    final fichadas = await ledger.clockedTotal();
+    double forzadaHoras = 0;
+    DateTime? inicioForzada;
 
-  Future<void> _cerrar(Recurso r) async {
-        try {
-          final ok = await cerrarRecursoDialog(context, ref, r);
-          if (ok) {
-            ref.invalidate(taskDetailProvider(widget.madreId));
-            ref.invalidate(tasksListProvider);
+    if (!mounted) return;
+    if (declaradas <= _eps && fichadas <= _eps) {
+      // Ni imputada al cliente ni fichada a mano: preguntar si comió y cuánto.
+      forzadaHoras = await pickPausa(context) ?? 0.0; // "Ninguna" => no comió
+    } else {
+      final hueco = declaradas - fichadas;
+      if (hueco > _eps) {
+        final inicio = _proponer1400(inicioJornada, salida, hueco);
+        if (inicio == null) {
+          _avisoNoCabe();
+        } else {
+          if (!mounted) return;
+          if (await confirmIncorporarPausa(context, hueco, inicio)) {
+            forzadaHoras = hueco;
+            inicioForzada = inicio;
           }
-        } catch (e) {
-          if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo cerrar: $e')));
         }
       }
+      // hueco <= 0 => ya estaba fichado a mano: no se pregunta ("salvo manual").
+    }
+
+    // Caso 0/0 con "sí comió": proponer también las 14:00.
+    if (forzadaHoras > _eps && inicioForzada == null) {
+      inicioForzada = _proponer1400(inicioJornada, salida, forzadaHoras);
+      if (inicioForzada == null) {
+        _avisoNoCabe();
+        forzadaHoras = 0;
+      }
+    }
+
+    // --- Observaciones de jornada + confirmación final ---
+    if (!mounted) return;
+    final obs = await pedirObservaciones(context);
+    if (obs == null) return; // canceló: no se cierra nada (ni pausa forzada).
+
+    setState(() => _busy = true);
+    try {
+      final (lat, lng) = await _location();
+      // 1) Insertar la pausa forzada ANTES del check-out (asistencia abierta).
+      if (forzadaHoras > _eps && inicioForzada != null) {
+        await ref.read(attendanceRepoProvider).breakForced(
+              _uuid(),
+              start: inicioForzada,
+              durationHours: forzadaHoras,
+              attendanceId: st.attendanceId,
+            );
+      }
+      // 2) Check-out (con observaciones).
+      await ref.read(attendanceRepoProvider).checkOut(
+            _uuid(),
+            attendanceId: st.attendanceId,
+            lat: lat,
+            lng: lng,
+            observaciones: obs.isEmpty ? null : obs,
+          );
+
+      // 3) Resumen, sumando la pausa forzada (st no la refleja aún).
+      final c = _compute(st);
+      final pausas = c.pausas + (forzadaHoras > _eps ? _fromHours(forzadaHoras) : Duration.zero);
+      final summary = _JourneySummary(
+        inicioJornada, salida, c.bruta, pausas, c.bruta - pausas,
+        obs: obs.isEmpty ? null : obs,
+      );
+
+      await ledger.clear();
+      _breakStart = null;
+      _lastSummary = summary;
+      ref.invalidate(attendanceStateProvider);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _avisoNoCabe() {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('La pausa no cabe en la jornada; revísala en oficina.')));
+    }
+  }
+
+  /// Propone las 14:00 (local) como inicio de la pausa forzada, ajustando para
+  /// que quepa dentro de [entrada, salida]. Devuelve null si la jornada es más
+  /// corta que la pausa. El solape con otras pausas lo arbitra el backend.
+  DateTime? _proponer1400(DateTime inicio, DateTime salida, double horas) {
+    final dur = _fromHours(horas);
+    if (salida.difference(inicio) < dur) return null;
+    var start = DateTime(salida.year, salida.month, salida.day, 14, 0);
+    final maxStart = salida.subtract(dur);
+    if (start.isBefore(inicio)) start = inicio;
+    if (start.isAfter(maxStart)) start = maxStart;
+    return start;
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (widget.recursos.isEmpty) return const SizedBox.shrink();
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: const [
-            Icon(Icons.list_alt, size: 18),
-            SizedBox(width: 8),
-            Text('Recursos del servicio', style: TextStyle(fontWeight: FontWeight.bold)),
-          ]),
-          const SizedBox(height: 8),
-          for (final r in widget.recursos) _fila(r),
-        ]),
-      ),
-    );
-  }
-
-  Widget _fila(Recurso r) {
-    // Verde = mío; gris = de otro operario (lectura).
-    final mio = r.esMio;
-    final color = mio ? Colors.green.shade800 : Colors.black54;
-    final estado = r.cerrada
-        ? 'Cerrada'
-        : r.hayTramoAbierto
-            ? 'En proceso'
-            : (r.iniciada ? 'En pausa' : '');
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(children: [
-        Icon(mio ? Icons.precision_manufacturing : Icons.lock_outline, size: 18, color: color),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(r.recurso, style: TextStyle(color: color, fontWeight: FontWeight.w500)),
-            if (!mio && r.empleado != null)
-              Text(r.empleado!, style: const TextStyle(color: Colors.black45, fontSize: 12)),
-            if (estado.isNotEmpty)
-              Text(estado, style: TextStyle(color: color, fontSize: 12)),
-          ]),
-        ),
-        if (mio && !r.cerrada) ..._botones(r),
-      ]),
-    );
-  }
-
-  List<Widget> _botones(Recurso r) {
-    if (_busy) return [const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))];
-    if (!r.iniciada) {
-      return [
-        FilledButton.icon(
-          style: FilledButton.styleFrom(
-            backgroundColor: Colors.green.shade700,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            minimumSize: const Size(0, 36),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    final stateAsync = ref.watch(attendanceStateProvider);
+    return Stack(
+      children: [
+        // Marca de agua tenue de fondo (no intercepta toques).
+        Positioned.fill(
+          child: IgnorePointer(
+            child: Center(child: BrandLogo(size: 260, opacity: 0.06)),
           ),
-          onPressed: () => _iniciar(r),
-          icon: const Icon(Icons.play_arrow, size: 18),
-          label: const Text('Iniciar'),
         ),
-      ];
-    }
-    final acciones = <Widget>[];
-    if (_detallista && r.hayTramoAbierto) {
-      acciones.add(IconButton(icon: const Icon(Icons.pause, color: Colors.orange), tooltip: 'Pausar', onPressed: () => _pausar(r)));
-    } else if (_detallista && !r.hayTramoAbierto) {
-      acciones.add(IconButton(icon: const Icon(Icons.play_arrow, color: Colors.green), tooltip: 'Reanudar', onPressed: () => _reanudar(r)));
-    }
-    acciones.add(IconButton(icon: const Icon(Icons.stop_circle, color: Colors.red), tooltip: 'Cerrar', onPressed: () => _cerrar(r)));
-    return acciones;
-  }
-}
-Future<DateTime?> pickFriendlyTime(BuildContext context) async {
-  final now = DateTime.now();
-  final choice = await showModalBottomSheet<String>(
-    context: context,
-    builder: (_) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(leading: const Icon(Icons.schedule), title: const Text('Ahora'),
-              onTap: () => Navigator.pop(context, 'now')),
-          ListTile(leading: const Icon(Icons.history), title: const Text('Hace 30 min'),
-              onTap: () => Navigator.pop(context, 'm30')),
-          ListTile(leading: const Icon(Icons.history), title: const Text('Hace 1 hora'),
-              onTap: () => Navigator.pop(context, 'h1')),
-          ListTile(leading: const Icon(Icons.edit_calendar), title: const Text('Otra hora…'),
-              onTap: () => Navigator.pop(context, 'custom')),
-        ],
-      ),
-    ),
-  );
-  switch (choice) {                                    // ← AHORA aquí
-    case 'now':
-      return DateTime.now();
-    case 'm30':
-      return DateTime.now().subtract(const Duration(minutes: 30));
-    case 'h1':
-      return DateTime.now().subtract(const Duration(hours: 1));
-    case 'custom':
-      return _pickCustom(context, now);                // ← ojo: ver punto siguiente
-    default:
-      return null;
-  }
-}
-
-/// Si el recurso queda bajo mínimo: el chófer elige Mínimo o Incidencia.
-Future<String?> pickMinimoIncidencia(BuildContext context, double horas, double minimo) {
-  return showDialog<String>(
-    context: context,
-    builder: (_) => AlertDialog(
-      title: const Text('Por debajo del mínimo'),
-      content: Text('Has indicado ${horas.toStringAsFixed(1)} h, por debajo del mínimo '
-          'de ${minimo.toStringAsFixed(0)} h.\n\n'
-          '· Mínimo: se factura el servicio mínimo.\n'
-          '· Incidencia: se factura lo indicado. Anota el motivo en observaciones.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-        OutlinedButton(onPressed: () => Navigator.pop(context, 'incidencia'), child: const Text('Incidencia')),
-        FilledButton(onPressed: () => Navigator.pop(context, 'minimo'), child: const Text('Mínimo')),
+        RefreshIndicator(
+          onRefresh: () async {
+            ref.invalidate(attendanceStateProvider);
+          },
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              stateAsync.when(
+                loading: () => const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator())),
+                error: (e, _) => _ErrorCard(message: '$e', onRetry: () => ref.invalidate(attendanceStateProvider)),
+                data: (st) => _StatusCard(state: st, totals: _compute(st)),
+              ),
+              if (_lastSummary != null) ...[
+                const SizedBox(height: 8),
+                _SummaryCard(summary: _lastSummary!),
+              ],
+              const SizedBox(height: 8),
+              stateAsync.maybeWhen(data: (st) => _actions(st), orElse: () => const SizedBox.shrink()),
+              // Logo nítido bajo el detalle.
+              const SizedBox(height: 32),
+              const Center(child: BrandLogo(size: 72)),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
       ],
-    ),
-  );
-}
-
-/// Cierre de UN recurso (reutilizable). Devuelve true si se cerró.
-Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r) async {
-  final cierre = await pickFriendlyTime(context);
-  if (cierre == null || !context.mounted) return false;
-  final pausa = await pickPausa(context);
-  if (pausa == null || !context.mounted) return false;
-
-  String modo = 'normal';
-  // Provisional SOLO para decidir si ofrecer Mínimo/Incidencia. El cálculo real lo hace el backend.
-  if (r.servicioMinimo > 0 && r.aperturaInformada != null) {
-    final h = cierre.difference(r.aperturaInformada!).inMinutes / 60.0;
-    final horas = ((h * 2).ceil() / 2.0 - pausa).clamp(0, double.infinity).toDouble();
-    if (horas < r.servicioMinimo) {
-      final m = await pickMinimoIncidencia(context, horas, r.servicioMinimo);
-      if (m == null) return false;
-      modo = m;
-    }
+    );
   }
-  final (lat, lng) = await bestEffortLocation();
-  if (!context.mounted) return false;
-  await ref.read(tasksRepoProvider).close(r.id, cierreInformada: cierre, pausa: pausa, modo: modo, lat: lat, lng: lng);
-  // Imputa la pausa declarada al libro de jornada (clave = recurso, para que
-  // reabrir/re-cerrar sobrescriba en vez de duplicar). Se concilia al fichar
-  // salida. La concatenación (_pausarActivo) NO pasa por aquí.
-  await ref.read(journeyLedgerProvider).setDeclared(r.id, pausa);
-  return true;
+
+  Widget _actions(AttendanceState st) {
+    if (!st.hasOpen) {
+      return FilledButton.icon(
+        onPressed: _busy ? null : _checkIn,
+        icon: const Icon(Icons.login),
+        label: const Text('Fichar entrada'),
+      );
+    }
+    return Column(
+      children: [
+        if (!st.isOnBreak)
+          _BreakStartButton(busy: _busy, onStart: (typeId) {
+            final ahora = DateTime.now();
+            _breakStart = ahora;
+            _run((repo) async {
+              await ref.read(journeyLedgerProvider).setBreakStart(ahora);
+              await repo.breakStart(_uuid(), attendanceId: st.attendanceId, breakTypeId: typeId);
+            });
+          })
+        else
+          FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: Colors.orange.shade700),
+            onPressed: _busy ? null : () {
+              _breakStart = null;
+              _run((repo) async {
+                // Pausa fichada => acumula su duración (restará del hueco al cerrar).
+                final ledger = ref.read(journeyLedgerProvider);
+                final inicio = await ledger.breakStart();
+                if (inicio != null) {
+                  final dur = DateTime.now().difference(inicio).inMilliseconds / 3600000.0;
+                  await ledger.addClocked(dur);
+                }
+                await ledger.clearBreakStart();
+                await repo.breakEnd(_uuid(), breakId: st.currentBreakId, attendanceId: st.attendanceId);
+              });
+            },
+            icon: const Icon(Icons.play_arrow),
+            label: Text('Finalizar pausa (${st.currentBreakType ?? ''})'),
+          ),
+        const SizedBox(height: 10),
+        FilledButton.icon(
+          style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+          onPressed: (_busy || st.isOnBreak) ? null : () => _checkOut(st),
+          icon: const Icon(Icons.logout),
+          label: const Text('Fichar salida'),
+        ),
+        if (st.isOnBreak)
+          const Padding(
+            padding: EdgeInsets.only(top: 8),
+            child: Text('Finaliza la pausa antes de fichar salida.', style: TextStyle(color: Colors.black54)),
+          ),
+      ],
+    );
+  }
 }
 
-/// Reloj directo con la fecha de hoy; si pulsa el icono de calendario puede
-  /// cambiar el día (caso raro).
-Future<DateTime?> _pickCustom(BuildContext context, DateTime base) async {
-  final tm = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(base));
-  if (tm == null) return null;
-  return DateTime(base.year, base.month, base.day, tm.hour, tm.minute);
+class _StatusCard extends StatelessWidget {
+  const _StatusCard({required this.state, required this.totals});
+  final AttendanceState state;
+  final ({Duration bruta, Duration pausas, Duration efectivas}) totals;
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (label, color, icon) = !state.hasOpen
+        ? ('Sin fichar', Colors.grey, Icons.timer_off)
+        : state.isOnBreak
+            ? ('En pausa', Colors.orange.shade700, Icons.pause_circle)
+            : ('Trabajando', scheme.primary, Icons.work);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            Row(children: [
+              Icon(icon, color: color, size: 32),
+              const SizedBox(width: 12),
+              Text(label, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: color)),
+            ]),
+            if (state.hasOpen) ...[
+              const Divider(height: 28),
+              _row('Entrada', state.checkIn != null ? _hm(state.checkIn!) : '—'),
+              _row('Jornada', _hms(totals.bruta)),
+              _row('Pausas', _hms(totals.pausas)),
+              _row('Efectivas', _hms(totals.efectivas)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _row(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(k, style: const TextStyle(color: Colors.black54)),
+          Text(v, style: const TextStyle(fontWeight: FontWeight.w600)),
+        ]),
+      );
+}
+
+class _SummaryCard extends StatelessWidget {
+  const _SummaryCard({required this.summary});
+  final _JourneySummary summary;
+  @override
+  Widget build(BuildContext context) => Card(
+        color: Colors.green.shade50,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(Icons.check_circle, color: Colors.green.shade700),
+                const SizedBox(width: 8),
+                Text('Última jornada  (${_dmy(summary.entrada)})',
+                    style: TextStyle(fontWeight: FontWeight.bold, color: Colors.green.shade800)),
+              ]),
+              const Divider(height: 24),
+              _row('Entrada', _hm(summary.entrada)),
+              _row('Salida', _hm(summary.salida)),
+              _row('Jornada', _hms(summary.bruta)),
+              _row('Pausas', _hms(summary.pausas)),
+              _row('Efectivas', _hms(summary.efectivas)),
+              if (summary.obs != null && summary.obs!.isNotEmpty) ...[
+                const Divider(height: 24),
+                const Text('Observaciones',
+                    style: TextStyle(color: Colors.black54)),
+                const SizedBox(height: 4),
+                Text(summary.obs!,
+                    style: const TextStyle(fontWeight: FontWeight.w500)),
+              ],
+            ],
+          ),
+        ),
+      );
+
+  Widget _row(String k, String v) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          Text(k, style: const TextStyle(color: Colors.black54)),
+          Text(v, style: const TextStyle(fontWeight: FontWeight.w600)),
+        ]),
+      );
+}
+
+class _BreakStartButton extends ConsumerWidget {
+  const _BreakStartButton({required this.busy, required this.onStart});
+  final bool busy;
+  final void Function(int? typeId) onStart;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final types = ref.watch(breakTypesProvider);
+    return FilledButton.icon(
+      style: FilledButton.styleFrom(backgroundColor: Colors.orange.shade700),
+      onPressed: busy
+          ? null
+          : () async {
+              final list = types.asData?.value ?? const [];
+              if (list.length <= 1) {
+                onStart(list.isEmpty ? null : list.first.id);
+                return;
+              }
+              final picked = await showModalBottomSheet<BreakType>(
+                context: context,
+                builder: (_) => SafeArea(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (final t in list)
+                        ListTile(title: Text(t.name), onTap: () => Navigator.pop(context, t)),
+                    ],
+                  ),
+                ),
+              );
+              if (picked != null) onStart(picked.id);
+            },
+      icon: const Icon(Icons.pause),
+      label: const Text('Iniciar pausa'),
+    );
+  }
+}
+
+class _ErrorCard extends StatelessWidget {
+  const _ErrorCard({required this.message, required this.onRetry});
+  final String message;
+  final VoidCallback onRetry;
+  @override
+  Widget build(BuildContext context) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(children: [
+            const Icon(Icons.error_outline, color: Colors.red, size: 32),
+            const SizedBox(height: 8),
+            Text(message, textAlign: TextAlign.center),
+            const SizedBox(height: 8),
+            TextButton(onPressed: onRetry, child: const Text('Reintentar')),
+          ]),
+        ),
+      );
 }

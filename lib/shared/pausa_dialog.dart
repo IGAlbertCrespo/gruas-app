@@ -61,3 +61,41 @@ Future<bool> confirmIncorporarPausa(
   );
   return res ?? false;
 }
+
+/// Diálogo final de cierre de jornada: captura observaciones (opcional) y
+/// confirma el cierre. Devuelve el texto (puede ir vacío) si el chófer pulsa
+/// "Finalizar jornada", o null si cancela (en cuyo caso NO se debe cerrar).
+Future<String?> pedirObservaciones(BuildContext context) async {
+  final ctrl = TextEditingController();
+  final res = await showDialog<String>(
+    context: context,
+    barrierDismissible: false,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Finalizar jornada'),
+      content: TextField(
+        controller: ctrl,
+        minLines: 2,
+        maxLines: 4,
+        autofocus: false,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: const InputDecoration(
+          labelText: 'Observaciones (opcional)',
+          hintText: 'Notas sobre la jornada…',
+          border: OutlineInputBorder(),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('Cancelar'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+          child: const Text('Finalizar jornada'),
+        ),
+      ],
+    ),
+  );
+  ctrl.dispose();
+  return res; // null = canceló; '' o texto = confirmó
+}

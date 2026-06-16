@@ -69,11 +69,13 @@ class AttendanceRepository {
           {if (lat != null) 'latitude': lat, if (lng != null) 'longitude': lng},
           timestamp: at != null ? _fmtUtc(at) : null);
 
-  Future<Map<String, dynamic>> checkOut(String uuid, {int? attendanceId, double? lat, double? lng}) =>
+  Future<Map<String, dynamic>> checkOut(String uuid,
+          {int? attendanceId, double? lat, double? lng, String? observaciones}) =>
       _op('/attendance/check-out', 'check_out', uuid, {
         if (attendanceId != null) 'attendance_id': attendanceId,
         if (lat != null) 'latitude': lat,
         if (lng != null) 'longitude': lng,
+        if (observaciones != null && observaciones.isNotEmpty) 'observaciones': observaciones,
       });
 
   Future<Map<String, dynamic>> breakStart(String uuid, {int? attendanceId, int? breakTypeId}) =>
