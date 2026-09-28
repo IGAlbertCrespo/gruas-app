@@ -26,6 +26,10 @@ class TaskSummary {
   final bool hasSignature;
   final bool iniciada;
   final bool cerrada;
+  /// servicio | no_facturable. Ausente en respuestas v1 → servicio.
+  final String tipo;
+  /// En no facturables el servidor iguala cerrada = completada.
+  final bool completada;
 
   const TaskSummary({
     required this.id,
@@ -43,6 +47,8 @@ class TaskSummary {
     this.hasSignature = false,
     this.iniciada = false,
     this.cerrada = false,
+    this.tipo = 'servicio',
+    this.completada = false,
   });
 
   static String? _nm(dynamic v) => v is Map ? v['name']?.toString() : null;
@@ -64,6 +70,9 @@ class TaskSummary {
         hasSignature: j['has_signature'] == true,
         iniciada: j['iniciada'] == true,
         cerrada: j['cerrada'] == true,
+        tipo: (j['tipo'] ?? 'servicio').toString(),
+        completada: j['completada'] == true ||
+            ((j['tipo']?.toString() == 'no_facturable') && j['cerrada'] == true),
       );
 }
 
@@ -213,6 +222,9 @@ class TaskDetail extends TaskSummary {
     super.recargo,
     super.hasSignature,
     super.iniciada,
+    super.cerrada,
+    super.tipo,
+    super.completada,
     required this.carga,
     required this.descarga,
     required this.worksheet,
@@ -248,6 +260,9 @@ class TaskDetail extends TaskSummary {
       recargo: s.recargo,
       hasSignature: s.hasSignature,
       iniciada: s.iniciada,
+      cerrada: s.cerrada,
+      tipo: s.tipo,
+      completada: s.completada,
       carga: Address.fromJson((j['carga'] ?? {}) as Map<String, dynamic>),
       descarga: Address.fromJson((j['descarga'] ?? {}) as Map<String, dynamic>),
       worksheet: Worksheet.fromJson((j['worksheet'] ?? {}) as Map<String, dynamic>),

@@ -9,6 +9,7 @@ import '../attendance_repository.dart';
 import '../../../shared/pausa_dialog.dart';
 import '../../../shared/widgets/brand_logo.dart';
 
+
 /// Resumen de la última jornada cerrada (se muestra hasta el siguiente fichaje).
 class _JourneySummary {
   final DateTime entrada;
@@ -16,7 +17,8 @@ class _JourneySummary {
   final Duration bruta;
   final Duration pausas;
   final Duration efectivas;
-  const _JourneySummary(this.entrada, this.salida, this.bruta, this.pausas, this.efectivas);
+  final String? obs;
+  const _JourneySummary(this.entrada, this.salida, this.bruta, this.pausas, this.efectivas, {this.obs});
 }
 
 Duration _fromHours(double h) => Duration(milliseconds: (h * 3600000).round());
@@ -180,6 +182,11 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
       }
     }
 
+    // --- Observaciones de jornada + confirmación final ---
+    if (!mounted) return;
+    final obs = await pedirObservaciones(context);
+    if (obs == null) return; // canceló: no se cierra nada (ni pausa forzada).
+
     setState(() => _busy = true);
     try {
       final (lat, lng) = await _location();
@@ -192,15 +199,22 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
               attendanceId: st.attendanceId,
             );
       }
-      // 2) Check-out.
-      await ref.read(attendanceRepoProvider)
-          .checkOut(_uuid(), attendanceId: st.attendanceId, lat: lat, lng: lng);
+      // 2) Check-out (con observaciones).
+      await ref.read(attendanceRepoProvider).checkOut(
+            _uuid(),
+            attendanceId: st.attendanceId,
+            lat: lat,
+            lng: lng,
+            observaciones: obs.isEmpty ? null : obs,
+          );
 
       // 3) Resumen, sumando la pausa forzada (st no la refleja aún).
       final c = _compute(st);
       final pausas = c.pausas + (forzadaHoras > _eps ? _fromHours(forzadaHoras) : Duration.zero);
       final summary = _JourneySummary(
-          inicioJornada, salida, c.bruta, pausas, c.bruta - pausas);
+        inicioJornada, salida, c.bruta, pausas, c.bruta - pausas,
+        obs: obs.isEmpty ? null : obs,
+      );
 
       await ledger.clear();
       _breakStart = null;
@@ -396,6 +410,14 @@ class _SummaryCard extends StatelessWidget {
               _row('Jornada', _hms(summary.bruta)),
               _row('Pausas', _hms(summary.pausas)),
               _row('Efectivas', _hms(summary.efectivas)),
+              if (summary.obs != null && summary.obs!.isNotEmpty) ...[
+                const Divider(height: 24),
+                const Text('Observaciones',
+                    style: TextStyle(color: Colors.black54)),
+                const SizedBox(height: 4),
+                Text(summary.obs!,
+                    style: const TextStyle(fontWeight: FontWeight.w500)),
+              ],
             ],
           ),
         ),

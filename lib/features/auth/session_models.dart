@@ -59,17 +59,30 @@ class SessionConfig {
   final bool capturaManualHoras;
   final bool mostrarInicioCierre;
   final bool mostrarHorasReales;
+  /// informada | planificada. En planificada el servidor ignora `informada`.
+  final String modoInicio;
+  /// hora | duracion. El selector de duración va en 4.3.
+  final String modoCierre;
+  final bool tramos;
 
   const SessionConfig({
     required this.capturaManualHoras,
     required this.mostrarInicioCierre,
     this.mostrarHorasReales = false,
+    this.modoInicio = 'informada',
+    this.modoCierre = 'hora',
+    this.tramos = false,
   });
+
+  bool get inicioPlanificado => modoInicio == 'planificada';
 
   factory SessionConfig.fromJson(Map<String, dynamic> j) => SessionConfig(
         capturaManualHoras: j['captura_manual_horas'] == true,
         mostrarInicioCierre: j['mostrar_inicio_cierre'] == true,
         mostrarHorasReales: j['mostrar_horas_reales'] == true,
+        modoInicio: (j['modo_inicio'] ?? 'informada').toString(),
+        modoCierre: (j['modo_cierre'] ?? 'hora').toString(),
+        tramos: j['tramos'] == true,
       );
 
   // Por si un /me viejo no trae config: por defecto, comportamiento actual

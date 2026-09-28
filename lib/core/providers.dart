@@ -6,6 +6,7 @@ import 'env/connection_profile.dart';
 import 'network/api_client.dart';
 import 'network/auth_interceptor.dart';
 import 'storage/secure_store.dart';
+import '../shared/app_version.dart';
 import '../features/identity/device_identity_service.dart';
 import '../features/identity/keystore_identity_service.dart';
 import '../features/auth/auth_repository.dart';
@@ -32,11 +33,19 @@ BaseOptions _baseOptions(ConnectionProfile? profile) => BaseOptions(
       headers: {'Content-Type': 'application/json'},
     );
 
-/// Dio "plano" SIN interceptor, para el handshake de autenticación
+/// Dio "plano" SIN AuthInterceptor, para el handshake de autenticación
 /// (endpoints públicos: enroll/challenge/token). Romper aquí la dependencia
 /// evita el ciclo dio -> authRepository -> apiClient -> dio.
+/// Sí lleva X-App-Version / X-App-Build: el servidor distingue v1/v2 en todas las peticiones.
 final authDioProvider = Provider<Dio>((ref) {
-  return Dio(_baseOptions(ref.watch(connectionProfileProvider)));
+  final dio = Dio(_baseOptions(ref.watch(connectionProfileProvider)));
+  dio.interceptors.add(InterceptorsWrapper(
+    onRequest: (options, handler) {
+      AppVersion.applyHeaders(options);
+      handler.next(options);
+    },
+  ));
+  return dio;
 });
 
 /// Dio autenticado, con interceptor de Bearer + refresco silencioso en 401.

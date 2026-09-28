@@ -33,14 +33,24 @@ class TasksRepository {
     return TaskDetail.fromJson(res);
   }
 
-  /// Inicia la tarea. `informada` es la hora declarada por el chófer (editable).
-  Future<TaskDetail> start(int id, {double? lat, double? lng, DateTime? informada}) async {
+  /// Inicia o reanuda. `informada` solo en modo informada (en planificada no se envía).
+  Future<({TaskDetail task, JornadaStart? jornada})> start(
+    int id, {
+    double? lat,
+    double? lng,
+    DateTime? informada,
+  }) async {
     final res = await api.postJson('/tasks/$id/start', data: {
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
       if (informada != null) 'informada': _fmtUtc(informada),
     });
-    return TaskDetail.fromJson(res);
+    return (
+      task: TaskDetail.fromJson(res),
+      jornada: res['jornada'] is Map
+          ? JornadaStart.fromJson(res['jornada'] as Map<String, dynamic>)
+          : null,
+    );
   }
   /// Cierra UN recurso: cierre informado + pausa + modo. El backend deriva el
   /// facturable (ceil30 − pausa). NO mueve etapa.
@@ -100,4 +110,23 @@ class TasksRepository {
       if (lng != null) 'lng': lng,
     });
   }
+}
+
+/// Respaldo de jornada que el servidor puede abrir al iniciar/reanudar una tarea.
+class JornadaStart {
+  final bool abiertaAutomaticamente;
+  final String? checkIn;
+  final String? error;
+
+  const JornadaStart({
+    required this.abiertaAutomaticamente,
+    this.checkIn,
+    this.error,
+  });
+
+  factory JornadaStart.fromJson(Map<String, dynamic> j) => JornadaStart(
+        abiertaAutomaticamente: j['abierta_automaticamente'] == true,
+        checkIn: j['check_in']?.toString(),
+        error: j['error']?.toString(),
+      );
 }

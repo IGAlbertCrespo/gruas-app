@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:dio/dio.dart';
 
+import '../../shared/app_version.dart';
+
 /// Inyecta el Bearer token y, ante un 401, intenta un re-login silencioso
 /// (reto-respuesta con la clave hardware) una sola vez y reintenta la petición.
 ///
@@ -25,12 +27,11 @@ class AuthInterceptor extends QueuedInterceptor {
   Future<void> onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
     // Los endpoints públicos no llevan token.
     final isPublic = options.path.contains('/auth/') || options.path.endsWith('/enroll');
+    AppVersion.applyHeaders(options);
     if (!isPublic) {
       final token = await getToken();
       if (token != null) {
         options.headers['Authorization'] = 'Bearer $token';
-        // ignore: avoid_print
-        //print('APP_TOKEN=$token');   // <-- TEMPORAL, quitar después de probar
       }
     }
     handler.next(options);
@@ -41,6 +42,7 @@ class AuthInterceptor extends QueuedInterceptor {
     final res = err.response;
     final path = err.requestOptions.path;
     final isPublic = path.contains('/auth/') || path.endsWith('/enroll');
+    // 426 upgrade_required no es 401: no re-login, no onSessionLost.
     final shouldTryRefresh = res?.statusCode == 401 &&
         !isPublic &&
         !_refreshing &&

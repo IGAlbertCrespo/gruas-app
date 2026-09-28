@@ -76,7 +76,7 @@ class SplashScreen extends ConsumerWidget {
               // Se lee del binario (pubspec version+build) vía appVersionProvider.
               // Mientras carga (muy breve) no muestra nada, no parpadea.
               Text(
-                ref.watch(appVersionProvider).valueOrNull?.short ?? '',
+                ref.watch(appVersionProvider).short,
                 style: const TextStyle(fontSize: 12, color: Colors.black54),
               ),
               const SizedBox(height: 24),

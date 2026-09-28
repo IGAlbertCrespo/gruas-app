@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/api_exception.dart';
 import '../../auth/session_controller.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
 import 'task_detail_screen.dart';
+import '../../../shared/widgets/upgrade_required.dart';
 
 class TasksListScreen extends ConsumerWidget {
   const TasksListScreen({super.key});
@@ -49,11 +51,16 @@ class TasksListScreen extends ConsumerWidget {
             child: listAsync.when(
               loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => ListView(children: [
-                Padding(padding: const EdgeInsets.all(24), child: Center(child: Text('$e'))),
+                if (e is ApiException && e.upgradeRequired)
+                  SizedBox(height: 360, child: UpgradeRequiredView(error: e))
+                else
+                  Padding(padding: const EdgeInsets.all(24), child: Center(child: Text('$e'))),
               ]),
               data: (res) {
-                // Opción A: completada = cerrada Y firmada.
+                // Con cabeceras v2 el GET incluye no facturables; sin filtro
+                // salen como servicios (p. ej. PTE. FIRMA). La tarjeta propia es 4.4.
                 final tasks = res.tasks.where((t) {
+                  if (t.tipo == 'no_facturable') return false;
                   final completada = t.cerrada && t.hasSignature;
                   return view == 'completadas' ? completada : !completada;
                 }).toList();

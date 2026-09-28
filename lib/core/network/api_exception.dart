@@ -10,6 +10,8 @@ class ApiException implements Exception {
   bool get isForbidden => status == 403;
   bool get needsReauth => code == 'invalid_token' || code == 'missing_token';
   bool get deviceNotAuthorized => code == 'device_not_authorized';
+  /// Forzar actualización. Nunca es 401: un 401 dispara re-login.
+  bool get upgradeRequired => status == 426 || code == 'upgrade_required';
 
   @override
   String toString() => detail ?? code;

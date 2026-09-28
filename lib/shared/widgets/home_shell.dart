@@ -96,7 +96,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       builder: (ctx) => Consumer(
         builder: (ctx, ref, _) {
           final profile = ref.watch(connectionProfileProvider);
-          final version = ref.watch(appVersionProvider).valueOrNull?.short ?? '—';
+          final version = ref.watch(appVersionProvider).short;
           final empresa = profile?.label;
           final url = profile?.baseUrl;
 

@@ -65,15 +65,44 @@ Future<bool> confirmIncorporarPausa(
 /// Diálogo final de cierre de jornada: captura observaciones (opcional) y
 /// confirma el cierre. Devuelve el texto (puede ir vacío) si el chófer pulsa
 /// "Finalizar jornada", o null si cancela (en cuyo caso NO se debe cerrar).
-Future<String?> pedirObservaciones(BuildContext context) async {
-  final ctrl = TextEditingController();
-  final res = await showDialog<String>(
+Future<String?> pedirObservaciones(BuildContext context) {
+  return showDialog<String>(
     context: context,
     barrierDismissible: false,
-    builder: (ctx) => AlertDialog(
+    builder: (_) => const _ObsDialog(),
+  );
+}
+
+/// Diálogo con el controller propio (lo dispone su State, exactamente cuando se
+/// desmonta el campo) y `unfocus()` antes de cerrar. Esto evita la carrera
+/// `_dependents.isEmpty` al cerrar la ruta con el TextField aún enfocado
+/// mientras la pantalla de debajo se reconstruye.
+class _ObsDialog extends StatefulWidget {
+  const _ObsDialog();
+  @override
+  State<_ObsDialog> createState() => _ObsDialogState();
+}
+
+class _ObsDialogState extends State<_ObsDialog> {
+  final _ctrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _close([String? value]) {
+    FocusScope.of(context).unfocus(); // suelta el foco/teclado antes del pop
+    Navigator.of(context).pop(value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
       title: const Text('Finalizar jornada'),
       content: TextField(
-        controller: ctrl,
+        controller: _ctrl,
         minLines: 2,
         maxLines: 4,
         autofocus: false,
@@ -86,16 +115,14 @@ Future<String?> pedirObservaciones(BuildContext context) async {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(ctx),
+          onPressed: () => _close(),
           child: const Text('Cancelar'),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+          onPressed: () => _close(_ctrl.text.trim()),
           child: const Text('Finalizar jornada'),
         ),
       ],
-    ),
-  );
-  ctrl.dispose();
-  return res; // null = canceló; '' o texto = confirmó
+    );
+  }
 }
