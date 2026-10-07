@@ -55,6 +55,30 @@ class OperatorProfile {
   }
 }
 
+/// Permisos de compañía para las acciones v3 (CONTRATO §2). Ausente → false:
+/// la APP oculta la acción y el servidor respondería 403 sin_permiso.
+class Permisos {
+  final bool cambiarServicio, anadirCargos, anularCargos,
+      editarRecargo, editarSalida, firmaDiferida;
+  const Permisos({
+    this.cambiarServicio = false,
+    this.anadirCargos = false,
+    this.anularCargos = false,
+    this.editarRecargo = false,
+    this.editarSalida = false,
+    this.firmaDiferida = false,
+  });
+
+  factory Permisos.fromJson(Map<String, dynamic> j) => Permisos(
+        cambiarServicio: j['cambiar_servicio'] == true,
+        anadirCargos: j['anadir_cargos'] == true,
+        anularCargos: j['anular_cargos'] == true,
+        editarRecargo: j['editar_recargo'] == true,
+        editarSalida: j['editar_salida'] == true,
+        firmaDiferida: j['firma_diferida'] == true,
+      );
+}
+
 class SessionConfig {
   final bool capturaManualHoras;
   final bool mostrarInicioCierre;
@@ -63,7 +87,15 @@ class SessionConfig {
   final String modoInicio;
   /// hora | duracion. El selector de duración va en 4.3.
   final String modoCierre;
-  final bool tramos;
+    final bool tramos;
+  /// siempre | solo_horario | nunca (§4.2)
+  final String comida;
+  /// Posición inicial del selector de comida, en minutos desde 00:00 (local).
+  final int comidaHoraDefectoMin;
+  final bool minimoMostrarFin;
+  final int firmaEnlaceDias;
+  final Permisos permisos;
+
 
   const SessionConfig({
     required this.capturaManualHoras,
@@ -72,9 +104,17 @@ class SessionConfig {
     this.modoInicio = 'informada',
     this.modoCierre = 'hora',
     this.tramos = false,
+    this.comida = 'siempre',
+    this.comidaHoraDefectoMin = 14 * 60,
+    this.minimoMostrarFin = false,
+    this.firmaEnlaceDias = 7,
+    this.permisos = const Permisos(),
   });
 
   bool get inicioPlanificado => modoInicio == 'planificada';
+  bool get cierrePorDuracion => modoCierre == 'duracion';
+  bool get cierreElegir => modoCierre == 'elegir';
+  bool get comidaNunca => comida == 'nunca';
 
   factory SessionConfig.fromJson(Map<String, dynamic> j) => SessionConfig(
         capturaManualHoras: j['captura_manual_horas'] == true,
@@ -83,7 +123,24 @@ class SessionConfig {
         modoInicio: (j['modo_inicio'] ?? 'informada').toString(),
         modoCierre: (j['modo_cierre'] ?? 'hora').toString(),
         tramos: j['tramos'] == true,
-      );
+        comida: (j['comida'] ?? 'siempre').toString(),
+        comidaHoraDefectoMin: _horaMin(j['comida_hora_defecto']),
+        minimoMostrarFin: j['minimo_mostrar_fin'] == true,
+        firmaEnlaceDias: (j['firma_enlace_dias'] as num?)?.toInt() ?? 7,
+        permisos: j['permisos'] is Map<String, dynamic>
+            ? Permisos.fromJson(j['permisos'] as Map<String, dynamic>)
+            : const Permisos(),
+  );
+
+  /// "HH:MM" (contrato) → minutos. Tolera un número decimal (14.5 = 14:30).
+  static int _horaMin(dynamic v) {
+    const def = 14 * 60;
+    if (v is num) return (v * 60).round().clamp(0, 24 * 60 - 1);
+    final m = RegExp(r'^(\d{1,2}):(\d{2})').firstMatch(v?.toString() ?? '');
+    if (m == null) return def;
+    final h = int.parse(m[1]!), mi = int.parse(m[2]!);
+    return (h > 23 || mi > 59) ? def : h * 60 + mi;
+  }
 
   // Por si un /me viejo no trae config: por defecto, comportamiento actual
   // (timer con botón = detallista).

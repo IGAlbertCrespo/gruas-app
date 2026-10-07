@@ -12,6 +12,12 @@ class ApiException implements Exception {
   bool get deviceNotAuthorized => code == 'device_not_authorized';
   /// Forzar actualización. Nunca es 401: un 401 dispara re-login.
   bool get upgradeRequired => status == 426 || code == 'upgrade_required';
+  bool get sinPermiso => code == 'sin_permiso';
+  bool get tareaFirmada => code == 'tarea_firmada';
+  bool get noEsMadre => code == 'no_es_madre';
+  /// Sin respuesta del servidor (sin cobertura, timeout…): ApiClient lo
+  /// traduce a 'network_error' sin status HTTP.
+  bool get sinConexion => code == 'network_error' && status == null;
 
   @override
   String toString() => detail ?? code;

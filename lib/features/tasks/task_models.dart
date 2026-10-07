@@ -1,4 +1,6 @@
 import '../../shared/odoo_dt.dart';
+import 'task_v3_models.dart';
+export 'task_v3_models.dart';
 
 
 class TaskStage {
@@ -26,6 +28,8 @@ class TaskSummary {
   final bool hasSignature;
   final bool iniciada;
   final bool cerrada;
+  /// Etiqueta del tipo de tarea interna (solo no facturables), p. ej. "Taller".
+  final String? tipoInterna;
   /// servicio | no_facturable. Ausente en respuestas v1 → servicio.
   final String tipo;
   /// En no facturables el servidor iguala cerrada = completada.
@@ -49,8 +53,9 @@ class TaskSummary {
     this.cerrada = false,
     this.tipo = 'servicio',
     this.completada = false,
+    this.tipoInterna,
   });
-
+  bool get esNoFacturable => tipo == 'no_facturable';
   static String? _nm(dynamic v) => v is Map ? v['name']?.toString() : null;
   static String? _recargo(dynamic v) => v is Map ? v['label']?.toString() : null;
 
@@ -73,6 +78,7 @@ class TaskSummary {
         tipo: (j['tipo'] ?? 'servicio').toString(),
         completada: j['completada'] == true ||
             ((j['tipo']?.toString() == 'no_facturable') && j['cerrada'] == true),
+        tipoInterna: _recargo(j['tipo_interna']),   // mismo formato {value, label}
       );
 }
 
@@ -141,13 +147,15 @@ class Recurso {
   final bool incidencia;
   final DateTime? aperturaInformada;
   final bool aplicarMinimo;
+  /// v3 (propuesta contrato: resumen_albaran por recurso).
+  final ResumenAlbaran? resumenAlbaran;
 
   const Recurso({
     required this.id, required this.recurso, this.empleado,
     required this.esMio, required this.iniciada, required this.cerrada,
     required this.hayTramoAbierto, required this.horasFacturar,
     required this.servicioMinimo, required this.incidencia,
-    this.aperturaInformada, required this.aplicarMinimo,
+    this.aperturaInformada, required this.aplicarMinimo, this.resumenAlbaran,
   });
 
   factory Recurso.fromJson(Map<String, dynamic> j) => Recurso(
@@ -163,6 +171,7 @@ class Recurso {
         incidencia: j['incidencia'] == true,
         aperturaInformada: parseOdooDt(j['apertura_informada']?.toString()),
         aplicarMinimo: j['aplicar_minimo'] == true,
+        resumenAlbaran: ResumenAlbaran.fromJson(j['resumen_albaran']),
       );
 }
 
@@ -208,6 +217,16 @@ class TaskDetail extends TaskSummary {
   final String? descripcionServicio;
   final List<Tramo> tramos;
   final List<Recurso> recursos;
+  final DateTime? fechaCompletada;
+  final Deca? deca;
+  // --- v3 (CONTRATO v3.1). En tareas hija todo null salvo resumenAlbaran ---
+  final Obra? obra;
+  final ServicioPrincipal? servicio;
+  final Seleccion? recargoSel;   // `recargo` ya existe en TaskSummary (String, de tipo_recargo)
+  final Seleccion? salidaSel;
+  final List<Cargo> cargos;
+  final FirmaEstado? firma;
+  final ResumenAlbaran? resumenAlbaran;
 
   const TaskDetail({
     required super.id,
@@ -225,6 +244,7 @@ class TaskDetail extends TaskSummary {
     super.cerrada,
     super.tipo,
     super.completada,
+    super.tipoInterna,
     required this.carga,
     required this.descarga,
     required this.worksheet,
@@ -234,9 +254,18 @@ class TaskDetail extends TaskSummary {
     this.cierreInformada,
     this.notasChofer,
     this.descripcionServicio,
+    this.fechaCompletada,
     this.accesorios = const [],
     this.tramos = const [],
     this.recursos = const [],
+    this.deca,
+    this.obra,
+    this.servicio,
+    this.recargoSel,
+    this.salidaSel,
+    this.cargos = const [],
+    this.firma,
+    this.resumenAlbaran,
 
   });
 
@@ -263,9 +292,20 @@ class TaskDetail extends TaskSummary {
       cerrada: s.cerrada,
       tipo: s.tipo,
       completada: s.completada,
+      tipoInterna: s.tipoInterna,
+      deca: Deca.fromJson(j['deca']),
+      obra: Obra.fromJson(j['obra']),
+      servicio: ServicioPrincipal.fromJson(j['servicio']),
+      recargoSel: Seleccion.fromJson(j['recargo']),
+      salidaSel: Seleccion.fromJson(j['salida']),
+      cargos: Cargo.listFromJson(j['cargos']),
+      firma: FirmaEstado.fromJson(j['firma']),
+      resumenAlbaran: ResumenAlbaran.fromJson(j['resumen_albaran']),
+      fechaCompletada: parseOdooDt(j['fecha_completada']?.toString()),
       carga: Address.fromJson((j['carga'] ?? {}) as Map<String, dynamic>),
       descarga: Address.fromJson((j['descarga'] ?? {}) as Map<String, dynamic>),
-      worksheet: Worksheet.fromJson((j['worksheet'] ?? {}) as Map<String, dynamic>),
+      worksheet: Worksheet.fromJson(
+          (j['worksheet'] as Map<String, dynamic>?) ?? const <String, dynamic>{}),
       accesorios: ((j['accesorios'] ?? []) as List)
           .map((e) => Accesorio.fromJson(e as Map<String, dynamic>))
           .toList(),
@@ -282,5 +322,31 @@ class TaskDetail extends TaskSummary {
           .map((e) => Recurso.fromJson(e as Map<String, dynamic>))
           .toList(),
     );
+  }
+}
+/// DeCA de la tarea. El ESTADO lo calcula el servidor (única fuente de verdad):
+/// no_requiere | pendiente | vigente | externo | anulado.
+class Deca {
+  final String estado;
+  final String? url;
+  final String? urlExterno;
+
+  const Deca({required this.estado, this.url, this.urlExterno});
+
+  static Deca? fromJson(dynamic j) {
+    if (j is! Map) return null;
+    final estado = j['estado']?.toString() ?? 'no_requiere';
+    final url = _s(j['url']);
+    // "vigente" sin URL no se puede pintar: se trata como pendiente.
+    return Deca(
+      estado: (estado == 'vigente' && url == null) ? 'pendiente' : estado,
+      url: url,
+      urlExterno: _s(j['url_externo']),
+    );
+  }
+
+  static String? _s(dynamic v) {
+    final s = v?.toString().trim();
+    return (s == null || s.isEmpty || s == 'false') ? null : s;
   }
 }

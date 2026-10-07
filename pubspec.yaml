@@ -1,7 +1,7 @@
 name: gruas_app
 description: APP móvil Grúas Salvador (conductores y jefes de tráfico).
 publish_to: "none"
-version: 2.0.0+8
+version: 3.0.0+10
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -40,9 +40,13 @@ dependencies:
   # Versión/build de la app (se muestra en splash y en "Acerca de")
   package_info_plus: ^9.0.0
 
+  qr_flutter: ^4.1.0
+
 dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_launcher_icons: ^0.14.4
+  flutter_test:
+     sdk: flutter
 
 flutter:
   uses-material-design: true

@@ -31,6 +31,19 @@ class AttendanceRepository {
     final res = await api.getJson('/attendance/state');
     return AttendanceState.fromJson(res);
   }
+  /// Servicios que impiden fichar la salida. null = no se pudo comprobar (sin red):
+  /// en ese caso no se bloquea, la salida se encola como siempre.
+  Future<List<TareaAbierta>?> tareasAbiertas() async {
+    try {
+      final res = await api.getJson('/attendance/state');
+      final l = res['tareas_abiertas'];
+      if (l is! List) return const [];
+      return l.whereType<Map>().map(TareaAbierta.fromJson).toList();
+    } on ApiException catch (e) {
+      if (e.code == 'network_error') return null;
+      rethrow;
+    }
+  }
 
   /// Ejecuta una operación; si falla por red, la encola y la devuelve como diferida.
   Future<Map<String, dynamic>> _op(
@@ -123,4 +136,22 @@ class AttendanceRepository {
     await queue.ack(okUuids);
     return okUuids.length;
   }
+}
+/// Servicio pendiente que impide fichar la salida.
+class TareaAbierta {
+  final int id;
+  final String name;
+  final String? albaran;
+  final String motivo; // sin_cerrar | sin_firmar
+
+  const TareaAbierta({required this.id, required this.name, this.albaran, required this.motivo});
+
+  bool get sinFirmar => motivo == 'sin_firmar';
+
+  static TareaAbierta fromJson(Map j) => TareaAbierta(
+        id: j['id'] as int,
+        name: j['name']?.toString() ?? '',
+        albaran: j['albaran']?.toString(),
+        motivo: j['motivo']?.toString() ?? 'sin_cerrar',
+      );
 }

@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
-
+import 'deca_section.dart';
+import 'jornada_aviso.dart';
 import '../../../shared/odoo_dt.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../shared/location.dart';
-import '../../../shared/pausa_dialog.dart';
 import '../../../shared/widgets/upgrade_required.dart';
 import '../../auth/session_controller.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
 import '../tasks_repository.dart';
+
 import 'signature_screen.dart';
+import 'cierre_recurso.dart';
+import 'resumen_albaran_view.dart';
 
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
@@ -254,6 +257,7 @@ class _Body extends ConsumerWidget {            // ← era StatelessWidget
           if (task.cierreHora != null)
             _kv('Cierre', task.cierreHora!.toLocal().toString().substring(0, 16)),
         ]),
+        DecaSection(deca: task.deca, titulo: task.albaran ?? task.name),
 
         _RecursosSection(madreId: task.id, recursos: task.recursos),
 
@@ -273,14 +277,12 @@ class _Body extends ConsumerWidget {            // ← era StatelessWidget
         _Section(icon: Icons.assignment_turned_in, title: 'Hoja de trabajo', color: scheme.primary, rows: [
           if (mostrarReales)
             _kv('Horas reales', task.worksheet.horasReales.toStringAsFixed(2)),
-          if (task.worksheet.pausaServicio > 0)
-            _kv('Pausa', '${task.worksheet.pausaServicio.toStringAsFixed(1)} h'),
-          if (task.worksheet.aplicarMinimo)
-            _kv('Facturación', 'Servicio mínimo')
-          else
-            _kv('Horas a facturar', task.worksheet.horasFacturar.toStringAsFixed(2)),
-          if ((task.worksheet.obsAlbaran ?? '').isNotEmpty) _kv('Obs. albarán', task.worksheet.obsAlbaran!),
-          if ((task.worksheet.obsCliente ?? '').isNotEmpty) _kv('Obs. cliente', task.worksheet.obsCliente!),
+          if (task.resumenAlbaran != null)
+            ResumenAlbaranView(resumen: task.resumenAlbaran!)
+          else ...[
+            if ((task.worksheet.obsAlbaran ?? '').isNotEmpty) _kv('Obs. conductor', task.worksheet.obsAlbaran!),
+            if ((task.worksheet.obsCliente ?? '').isNotEmpty) _kv('Obs. cliente', task.worksheet.obsCliente!),
+          ],
           _kv('Firma', task.worksheet.hasSignature ? '✔ recogida' : '— pendiente'),
         ]),
         const SizedBox(height: 80),
@@ -490,42 +492,7 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
     }
   }
 
-  Future<void> _avisoJornada(JornadaStart? j) async {
-    if (j == null || !mounted) return;
-    if (j.abiertaAutomaticamente) {
-      await ref.read(journeyLedgerProvider).clear();
-      if (!mounted) return;
-      ref.invalidate(attendanceStateProvider);
-      await showDialog<void>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Jornada abierta'),
-          content: Text(() {
-            final h = parseOdooDt(j.checkIn)?.toLocal();
-            final hm = h == null
-                ? ''
-                : ' a las ${h.hour.toString().padLeft(2, '0')}:${h.minute.toString().padLeft(2, '0')}';
-            return 'No tenías la jornada fichada. Se ha abierto automáticamente$hm.';
-          }()),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Entendido')),
-          ],
-        ),
-      );
-    } else if (j.error != null && j.error!.isNotEmpty) {
-      await showDialog<void>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('Jornada'),
-          content: Text('No se ha podido abrir tu jornada automáticamente. '
-              'Ficha la entrada en Asistencia.\n\n${j.error}'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cerrar')),
-          ],
-        ),
-      );
-    }
-  }
+    Future<void> _avisoJornada(JornadaStart? j) => tratarJornada(context, ref, j);
 
   Future<void> _iniciar(Recurso r) async {
     final planificada =
@@ -661,7 +628,7 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
   }
 }
 Future<DateTime?> pickFriendlyTime(BuildContext context) async {
-  final now = DateTime.now();
+
   final choice = await showModalBottomSheet<String>(
     context: context,
     builder: (_) => SafeArea(
@@ -689,63 +656,17 @@ Future<DateTime?> pickFriendlyTime(BuildContext context) async {
     case 'h1':
       return DateTime.now().subtract(const Duration(hours: 1));
     case 'custom':
-      return _pickCustom(context, now);                // ← ojo: ver punto siguiente
+      return _pickCustom(context);
     default:
       return null;
   }
 }
 
-/// Si el recurso queda bajo mínimo: el chófer elige Mínimo o Incidencia.
-Future<String?> pickMinimoIncidencia(BuildContext context, double horas, double minimo) {
-  return showDialog<String>(
-    context: context,
-    builder: (_) => AlertDialog(
-      title: const Text('Por debajo del mínimo'),
-      content: Text('Has indicado ${horas.toStringAsFixed(1)} h, por debajo del mínimo '
-          'de ${minimo.toStringAsFixed(0)} h.\n\n'
-          '· Mínimo: se factura el servicio mínimo.\n'
-          '· Incidencia: se factura lo indicado. Anota el motivo en observaciones.'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-        OutlinedButton(onPressed: () => Navigator.pop(context, 'incidencia'), child: const Text('Incidencia')),
-        FilledButton(onPressed: () => Navigator.pop(context, 'minimo'), child: const Text('Mínimo')),
-      ],
-    ),
-  );
-}
-
-/// Cierre de UN recurso (reutilizable). Devuelve true si se cerró.
-Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r) async {
-  final cierre = await pickFriendlyTime(context);
-  if (cierre == null || !context.mounted) return false;
-  final pausa = await pickPausa(context);
-  if (pausa == null || !context.mounted) return false;
-
-  String modo = 'normal';
-  // Provisional SOLO para decidir si ofrecer Mínimo/Incidencia. El cálculo real lo hace el backend.
-  if (r.servicioMinimo > 0 && r.aperturaInformada != null) {
-    final h = cierre.difference(r.aperturaInformada!).inMinutes / 60.0;
-    final horas = ((h * 2).ceil() / 2.0 - pausa).clamp(0, double.infinity).toDouble();
-    if (horas < r.servicioMinimo) {
-      final m = await pickMinimoIncidencia(context, horas, r.servicioMinimo);
-      if (m == null) return false;
-      modo = m;
-    }
-  }
-  final (lat, lng) = await bestEffortLocation();
-  if (!context.mounted) return false;
-  await ref.read(tasksRepoProvider).close(r.id, cierreInformada: cierre, pausa: pausa, modo: modo, lat: lat, lng: lng);
-  // Imputa la pausa declarada al libro de jornada (clave = recurso, para que
-  // reabrir/re-cerrar sobrescriba en vez de duplicar). Se concilia al fichar
-  // salida. La concatenación (_pausarActivo) NO pasa por aquí.
-  await ref.read(journeyLedgerProvider).setDeclared(r.id, pausa);
-  return true;
-}
-
-/// Reloj directo con la fecha de hoy; si pulsa el icono de calendario puede
-  /// cambiar el día (caso raro).
-Future<DateTime?> _pickCustom(BuildContext context, DateTime base) async {
-  final tm = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(base));
+/// Reloj "Otra hora…": la hora elegida se ancla a su ocurrencia pasada más
+/// reciente (hoy; ahora si es futura ≤ 15 min; ayer si es más futura).
+/// Nunca devuelve una hora futura.
+Future<DateTime?> _pickCustom(BuildContext context) async {
+  final tm = await showTimePicker(context: context, initialTime: TimeOfDay.now());
   if (tm == null) return null;
-  return DateTime(base.year, base.month, base.day, tm.hour, tm.minute);
+  return anclarAlPasado(tm.hour, tm.minute);
 }

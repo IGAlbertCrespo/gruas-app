@@ -6,7 +6,9 @@ import 'package:signature/signature.dart';
 import '../../../shared/location.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
-import 'task_detail_screen.dart'; // cerrarRecursoDialog (función top-level)
+import 'cierre_recurso.dart';
+import 'resumen_albaran_view.dart';
+import '../../auth/session_controller.dart';
 
 /// Firma del servicio. Muestra el resumen de todos los recursos (editable),
 /// observaciones del cliente, y la firma. Al confirmar: guarda firma + finaliza
@@ -24,6 +26,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
   final _dni = TextEditingController();              // antes: text: ...dniSig
   late final _obs = TextEditingController(text: widget.task.worksheet.obsCliente ?? '');
   bool _busy = false;
+  bool _ausente = false;
 
   @override
   void dispose() {
@@ -43,6 +46,26 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
     }
   }
 
+  static const _notaAusente = 'Cliente ausente: firma el conductor.';
+
+  void _setAusente(bool v) {
+    setState(() {
+      _ausente = v;
+      if (v) {
+        final conductor =
+            ref.read(sessionControllerProvider).profile?.employeeName ?? 'Conductor';
+        _signer.text = '$conductor (cliente ausente)';
+        _dni.clear();
+        if (!_obs.text.contains(_notaAusente)) {
+          _obs.text = _obs.text.trim().isEmpty ? _notaAusente : '$_notaAusente ${_obs.text.trim()}';
+        }
+      } else {
+        _signer.clear();
+        _obs.text = _obs.text.replaceAll(_notaAusente, '').trim();
+      }
+    });
+  }
+
   bool _dniValido(String s) {
     final t = s.trim().toUpperCase();
     if (!RegExp(r'^\d{8}[A-Z]$').hasMatch(t)) return false;
@@ -56,7 +79,11 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
     final hayNombre = _signer.text.trim().isNotEmpty;
     final dni = _dni.text.trim();
     final hayDni = dni.isNotEmpty;
-
+    if (_ausente && _controller.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Con el cliente ausente debe firmar el conductor.')));
+      return;
+    }
     // Mínimo 2 de 3: firma / nombre / DNI.
     final n = [hayFirma, hayNombre, hayDni].where((b) => b).length;
     if (n < 2) {
@@ -138,6 +165,13 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           const SizedBox(height: 8),
           for (final r in t.recursos) _filaResumen(r),
           const Divider(height: 24),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Cliente ausente'),
+            subtitle: const Text('Firma el conductor y queda anotado en observaciones'),
+            value: _ausente,
+            onChanged: _busy ? null : _setAusente,
+          ),
           TextField(controller: _obs, maxLines: 2,
               decoration: const InputDecoration(labelText: 'Observaciones del cliente')),
           const SizedBox(height: 12),
@@ -180,26 +214,22 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
     );
   }
 
-  Widget _filaResumen(Recurso r) {
-    final fact = r.aplicarMinimo ? 'Mínimo' : '${r.horasFacturar.toStringAsFixed(1)} h';
+    Widget _filaResumen(Recurso r) {
+    final res = r.resumenAlbaran;
     return InkWell(
       onTap: r.esMio ? () => _editarRecurso(r) : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Row(children: [
-          Expanded(child: Text(r.recurso)),
-          if (r.incidencia)
-            Container(
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(6)),
-              child: Text('Incidencia', style: TextStyle(color: Colors.red.shade700, fontSize: 11)),
-            ),
-          Text(fact, style: const TextStyle(fontWeight: FontWeight.w600)),
-          if (r.esMio) const Padding(
-            padding: EdgeInsets.only(left: 6),
-            child: Icon(Icons.edit, size: 16, color: Colors.black38),
-          ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: Text(r.recurso, style: const TextStyle(fontWeight: FontWeight.w600))),
+            if (r.esMio) const Icon(Icons.edit, size: 16, color: Colors.black38),
+          ]),
+          if (res != null)
+            ResumenAlbaranView(resumen: res)
+          else
+            Text(r.cerrada ? 'Cerrado' : 'Sin cerrar',
+                style: const TextStyle(color: Colors.black54)),
         ]),
       ),
     );

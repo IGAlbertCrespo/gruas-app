@@ -6,6 +6,7 @@ import '../../auth/session_controller.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
 import 'task_detail_screen.dart';
+import 'non_billable_detail_screen.dart';
 import '../../../shared/widgets/upgrade_required.dart';
 
 class TasksListScreen extends ConsumerWidget {
@@ -57,11 +58,10 @@ class TasksListScreen extends ConsumerWidget {
                   Padding(padding: const EdgeInsets.all(24), child: Center(child: Text('$e'))),
               ]),
               data: (res) {
-                // Con cabeceras v2 el GET incluye no facturables; sin filtro
-                // salen como servicios (p. ej. PTE. FIRMA). La tarjeta propia es 4.4.
+                // No facturables: completada = marcada por el conductor (sin firma).
                 final tasks = res.tasks.where((t) {
-                  if (t.tipo == 'no_facturable') return false;
-                  final completada = t.cerrada && t.hasSignature;
+                  final completada =
+                      t.esNoFacturable ? t.completada : (t.cerrada && t.hasSignature);
                   return view == 'completadas' ? completada : !completada;
                 }).toList();
                 if (tasks.isEmpty) {
@@ -97,6 +97,7 @@ class _TaskCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (task.esNoFacturable) return _NoFacturableCard(task: task, readOnly: readOnly);
     final route = [task.cargaPoblacion, task.descargaPoblacion].where((e) => e != null && e.isNotEmpty);
     final enProceso = task.iniciada && !task.cerrada;
     final pteFirma = task.cerrada && !task.hasSignature;
@@ -173,4 +174,42 @@ class _StatusBadge extends StatelessWidget {
           ]),
         ),
       );
+}
+/// Tarjeta de tarea interna (no facturable): ámbar, sin etapas ni firma.
+class _NoFacturableCard extends StatelessWidget {
+  const _NoFacturableCard({required this.task, required this.readOnly});
+  final TaskSummary task;
+  final bool readOnly;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: Colors.amber.shade50,
+      child: ListTile(
+        leading: Icon(Icons.engineering, color: Colors.amber.shade800, size: 32),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (_) => NonBillableDetailScreen(taskId: task.id, readOnly: readOnly)),
+        ),
+        title: Text(task.name, maxLines: 3, overflow: TextOverflow.ellipsis),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _StatusBadge(
+              text: (task.tipoInterna ?? 'Tarea interna').toUpperCase(),
+              color: Colors.amber,
+              icon: Icons.engineering,
+            ),
+            if (task.partner != null)
+              Text(task.partner!, style: const TextStyle(color: Colors.black54)),
+            if (task.fechaServicio != null)
+              Text(task.fechaServicio!.toLocal().toString().substring(0, 16),
+                  style: const TextStyle(fontSize: 12, color: Colors.black45)),
+          ],
+        ),
+        trailing: task.completada ? const Icon(Icons.check_circle, color: Colors.green) : null,
+      ),
+    );
+  }
 }

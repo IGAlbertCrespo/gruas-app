@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'env/connection_profile.dart';
+import 'env/environment.dart';
 import 'network/api_client.dart';
 import 'network/auth_interceptor.dart';
+import 'network/mock_v3_interceptor.dart';
 import 'storage/secure_store.dart';
 import '../shared/app_version.dart';
 import '../features/identity/device_identity_service.dart';
@@ -82,6 +84,9 @@ final dioProvider = Provider<Dio>((ref) {
     },
     onSessionLost: () => store.clearSession(),
   ));
+  if (kMockV3 && !Env.config.isProduction) {
+    dio.interceptors.add(MockV3Interceptor());
+  }
   return dio;
 });
 

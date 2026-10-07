@@ -8,6 +8,7 @@ import '../attendance_models.dart';
 import '../attendance_repository.dart';
 import '../../../shared/pausa_dialog.dart';
 import '../../../shared/widgets/brand_logo.dart';
+import '../../tasks/screens/task_detail_screen.dart';
 
 
 /// Resumen de la última jornada cerrada (se muestra hasta el siguiente fichaje).
@@ -140,8 +141,57 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
     });
   }
 
+  /// true si se puede fichar la salida. Sin red o ante un error inesperado
+  /// no se bloquea: el fichaje es lo primero y oficina regulariza.
+  Future<bool> _sinTareasAbiertas() async {
+    setState(() => _busy = true);
+    List<TareaAbierta>? abiertas;
+    try {
+      abiertas = await ref.read(attendanceRepoProvider).tareasAbiertas();
+    } catch (_) {
+      abiertas = null;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+    final lista = abiertas;
+    if (lista == null || lista.isEmpty || !mounted) return true;
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Tienes servicios pendientes'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(shrinkWrap: true, children: [
+            const Text('Antes de fichar la salida debes cerrar y finalizar estos servicios:'),
+            const SizedBox(height: 8),
+            for (final t in lista)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(t.sinFirmar ? Icons.draw : Icons.stop_circle, color: Colors.red),
+                title: Text(t.albaran ?? t.name),
+                subtitle: Text(t.sinFirmar ? 'Pendiente de firma' : 'Sin cerrar'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.push(context,
+                      MaterialPageRoute(builder: (_) => TaskDetailScreen(taskId: t.id)));
+                },
+              ),
+          ]),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Entendido')),
+        ],
+      ),
+    );
+    return false;
+  }
+
   Future<void> _checkOut(AttendanceState st) async {
     if (st.checkIn == null) return;
+    // Regla: no se ficha la salida con servicios sin cerrar o sin finalizar.
+    if (!await _sinTareasAbiertas()) return;
     final ledger = ref.read(journeyLedgerProvider);
     final salida = DateTime.now();
     final inicioJornada = st.checkIn!.toLocal();

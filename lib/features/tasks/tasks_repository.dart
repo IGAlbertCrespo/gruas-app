@@ -52,24 +52,68 @@ class TasksRepository {
           : null,
     );
   }
-  /// Cierra UN recurso: cierre informado + pausa + modo. El backend deriva el
-  /// facturable (ceil30 − pausa). NO mueve etapa.
+    /// Cierra UN recurso (CONTRATO v3.1 §4.1). No mueve etapa. El servidor
+  /// calcula el facturable y decide el mínimo. `apertura_informada` no se envía
+  /// (el servidor usa la guardada).
   Future<TaskDetail> close(int id, {
+    required String modoCierre,      // 'hora' | 'duracion'
     DateTime? cierreInformada,
-    double? pausa,
-    String modo = 'normal',           // 'normal' | 'minimo' | 'incidencia'
+    double? horasTotales,
+    DateTime? comidaInicio,
+    DateTime? comidaFin,
+    double? comidaDuracion,
+    bool incidencia = false,
+    String? obsAlbaran,
+    bool confirmar = false,
     double? lat,
     double? lng,
   }) async {
+    Map<String, dynamic>? comida;
+    if (modoCierre == 'hora' && comidaInicio != null && comidaFin != null) {
+      comida = {'inicio': _fmtUtc(comidaInicio), 'fin': _fmtUtc(comidaFin)};
+    } else if (modoCierre == 'duracion' && (comidaDuracion ?? 0) > 0) {
+      comida = {'duracion': comidaDuracion};
+    }
     final res = await api.postJson('/tasks/$id/close', data: {
+      'modo_cierre': modoCierre,
       if (cierreInformada != null) 'cierre_informada': _fmtUtc(cierreInformada),
-      if (pausa != null) 'pausa': pausa,
-      'modo': modo,
+      if (horasTotales != null) 'horas_totales': horasTotales,
+      'comida': comida,
+      'incidencia': incidencia,
+      if (obsAlbaran != null) 'obs_albaran': obsAlbaran,
+      if (confirmar) 'confirmar': true,
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
     });
     return TaskDetail.fromJson(res);
   }
+
+  /// Completa una NO FACTURABLE con inicio/fin informados. Repetible en el día.
+  /// El servidor aplica la regla de medianoche y el umbral de 16 h, y puede
+  /// abrir la jornada con el inicio si ese día no hay ningún fichaje.
+  Future<({TaskDetail task, JornadaStart? jornada})> complete(
+    int id, {
+    required DateTime inicio,
+    required DateTime fin,
+    bool confirmar = false,
+    double? lat,
+    double? lng,
+  }) async {
+    final res = await api.postJson('/tasks/$id/complete', data: {
+      'inicio': _fmtUtc(inicio),
+      'fin': _fmtUtc(fin),
+      if (confirmar) 'confirmar': true,
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
+    });
+    return (
+      task: TaskDetail.fromJson(res),
+      jornada: res['jornada'] is Map
+          ? JornadaStart.fromJson(res['jornada'] as Map<String, dynamic>)
+          : null,
+    );
+  }
+
 
   /// Finaliza el servicio: mueve la madre a Finalizada (arrastra hijas).
   Future<TaskDetail> finalize(int id, {double? lat, double? lng}) async {
