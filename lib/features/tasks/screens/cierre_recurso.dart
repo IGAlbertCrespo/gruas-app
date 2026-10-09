@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/network/api_exception.dart';
 import '../../../shared/duracion_sospechosa.dart';
 import '../../../shared/horas.dart';
 import '../../../shared/horas_totales_dialog.dart';
 import '../../../shared/location.dart';
 import '../../../shared/pausa_dialog.dart' show fmtHoras;
+import '../../../shared/selector_hora.dart';
 import '../../auth/session_controller.dart';
 import '../../auth/session_models.dart';
 import '../task_models.dart';
@@ -15,13 +17,20 @@ import 'task_detail_screen.dart' show pickFriendlyTime;
 /// Cierre de UN recurso (CONTRATO v3.1 §4). Devuelve true si el servidor lo cerró.
 ///
 /// 1. Modo (si la compañía tiene `elegir`): horario u horas totales.
-/// 2. Horario: hora de fin + franja de comida. Horas totales: horas + comida opcional.
+/// 2. Horario: hora de fin con la FECHA DEDUCIDA del inicio + franja de comida.
+///    Si la ventana supera 16 h: corregir fin / corregir inicio / es correcto.
+///    Horas totales: "empezó tal día, ¿cuántas horas?" + comida opcional; el
+///    máximo es el tiempo transcurrido (el fin nunca es futuro).
 /// 3. Si el facturable provisional (§4.2) queda bajo el mínimo: pregunta por
 ///    incidencia SIN cifras. Sí → observaciones del conductor obligatorias.
-/// 4. POST /close. El mínimo lo decide el servidor.
+/// 4. POST /close. El mínimo lo decide el servidor. `apertura_informada` solo
+///    viaja si el conductor ha corregido el inicio.
 ///
-/// Los errores de API se propagan: los llamantes ya los muestran.
-Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r) async {
+/// `409 tarea_firmada` / `409 no_editable` (v3.3): se muestra el `detail`, se
+/// refresca la madre ([madreId]) y devuelve false. El resto de errores de API
+/// se propagan: los llamantes ya los muestran.
+Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
+    {int? madreId}) async {
   final cfg = ref.read(sessionControllerProvider).profile?.config ?? SessionConfig.fallback;
   final regla = reglaComidaDe(cfg.comida);
 
@@ -34,16 +43,19 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r)
     porDuracion = cfg.cierrePorDuracion;
   }
 
-  final apertura = r.aperturaInformada;
+  DateTime? aperturaCorregida; // "Corregir inicio" → apertura_informada
 
-  // Bucle: "Revisar horas" (mínimo o duración sospechosa) vuelve a pedir las horas.
+  // Bucle: "Revisar horas", "Corregir fin/inicio" o duración sospechosa
+  // vuelven a pedir las horas.
   while (true) {
     if (!context.mounted) return false;
+    final apertura = aperturaCorregida ?? r.aperturaInformada;
 
     DateTime? cierre;
     double? horasTotales;
     FranjaComida? franja;
     double comida = 0;
+    var confirmado = false; // "Es correcto" ante ventana > 16 h
 
     if (porDuracion) {
       final res = await pickHorasTotales(
@@ -51,13 +63,34 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r)
         inicial: horasTotalesIniciales(apertura: apertura), // sin mínimo: nunca se insinúa la cifra
         apertura: apertura,
         regla: regla,
+        maximo: apertura != null ? horasMaxHasta(apertura) : null,
       );
       if (res == null || !context.mounted) return false;
       horasTotales = res.horas;
       comida = res.comida;
     } else {
-      cierre = await pickFriendlyTime(context);
+      cierre = apertura != null
+          ? await pickHoraFin(context, apertura)
+          : await pickFriendlyTime(context); // sin apertura (anómalo): comportamiento v2
       if (cierre == null || !context.mounted) return false;
+
+      if (apertura != null && horasEntre(apertura, cierre) > umbralOlvidoHoras) {
+        final resp = await _avisoServicioLargo(context, apertura, cierre);
+        if (resp == null || !context.mounted) return false;
+        if (resp == _RespLargo.corregirFin) continue;
+        if (resp == _RespLargo.corregirInicio) {
+          final ni = await pickFechaHoraInicio(
+            context,
+            desde: r.aperturaInformada ?? apertura,
+            inicial: apertura,
+            atajos: false,
+          );
+          if (ni != null) aperturaCorregida = ni;
+          continue;
+        }
+        confirmado = true;
+      }
+
       if (regla != ReglaComida.nunca && apertura != null) {
         final res = await pickFranjaComida(
           context,
@@ -90,23 +123,36 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r)
 
     final (lat, lng) = await bestEffortLocation();
     if (!context.mounted) return false;
-    final res = await conConfirmacionDuracion(
-      context,
-      (confirmar) => ref.read(tasksRepoProvider).close(
-            r.id,
-            modoCierre: porDuracion ? 'duracion' : 'hora',
-            cierreInformada: cierre,
-            horasTotales: horasTotales,
-            comidaInicio: franja?.inicio,
-            comidaFin: franja?.fin,
-            comidaDuracion: porDuracion && comida > 0 ? comida : null,
-            incidencia: incidencia,
-            obsAlbaran: obs,
-            confirmar: confirmar,
-            lat: lat,
-            lng: lng,
-          ),
-    );
+    final TaskDetail? res;
+    try {
+      res = await conConfirmacionDuracion(
+        context,
+        (confirmar) => ref.read(tasksRepoProvider).close(
+              r.id,
+              modoCierre: porDuracion ? 'duracion' : 'hora',
+              aperturaInformada: aperturaCorregida,
+              cierreInformada: cierre,
+              horasTotales: horasTotales,
+              comidaInicio: franja?.inicio,
+              comidaFin: franja?.fin,
+              comidaDuracion: porDuracion && comida > 0 ? comida : null,
+              incidencia: incidencia,
+              obsAlbaran: obs,
+              confirmar: confirmar || confirmado,
+              lat: lat,
+              lng: lng,
+            ),
+      );
+    } on ApiException catch (e) {
+      if (!(e.tareaFirmada || e.noEditable)) rethrow;
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(e.detail ?? 'Este servicio ya no se puede modificar desde la APP.')));
+      }
+      ref.invalidate(taskDetailProvider(madreId ?? r.id));
+      ref.invalidate(tasksListProvider);
+      return false;
+    }
     if (res == null) continue; // eligió revisar: el servidor no ha guardado nada
 
     // Comida declarada al libro de jornada (clave = recurso: re-cerrar
@@ -115,6 +161,34 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r)
     return true;
   }
 }
+
+enum _RespLargo { corregirFin, corregirInicio, esCorrecto }
+
+/// Ventana > 16 h: casi siempre es un error de hora (fin o inicio).
+Future<_RespLargo?> _avisoServicioLargo(BuildContext context, DateTime inicio, DateTime fin) =>
+    showDialog<_RespLargo>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Servicio muy largo'),
+        content: Text('${fmtDiaHora(inicio)} → ${fmtDiaHora(fin)}\n'
+            'Duración: ${fmtHoras(horasEntre(inicio, fin))}\n\n¿Es correcto?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, _RespLargo.corregirInicio),
+            child: const Text('Corregir inicio'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, _RespLargo.corregirFin),
+            child: const Text('Corregir fin'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, _RespLargo.esCorrecto),
+            child: const Text('Es correcto'),
+          ),
+        ],
+      ),
+    );
 
 /// true = horas totales · false = horario · null = cancelar.
 Future<bool?> _pickModoCierre(BuildContext context) => showDialog<bool>(
@@ -256,13 +330,24 @@ Future<({FranjaComida? franja})?> pickFranjaComida(
   return showDialog<({FranjaComida? franja})>(
     context: context,
     barrierDismissible: false,
-    builder: (_) => _FranjaComidaDialog(rejilla: rejilla, iInicial: i, fInicial: f),
+    builder: (_) => _FranjaComidaDialog(
+      rejilla: rejilla,
+      iInicial: i,
+      fInicial: f,
+      ventana: '${fmtDiaHora(inicio)} → ${fmtDiaHora(normalizarFin(inicio, fin))}',
+    ),
   );
 }
 
 class _FranjaComidaDialog extends StatefulWidget {
-  const _FranjaComidaDialog({required this.rejilla, required this.iInicial, required this.fInicial});
+  const _FranjaComidaDialog({
+    required this.rejilla,
+    required this.iInicial,
+    required this.fInicial,
+    required this.ventana,
+  });
   final List<DateTime> rejilla;
+  final String ventana; // servicio completo, con fechas
   final int iInicial;
   final int fInicial;
   @override
@@ -302,6 +387,8 @@ class _FranjaComidaDialogState extends State<_FranjaComidaDialog> {
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          Text(widget.ventana, style: const TextStyle(color: Colors.black54)),
+          const SizedBox(height: 12),
           _paso('Inicio', _i,
               _i > 0 ? () => setState(() => _i--) : null,
               _i < _f - 1 ? () => setState(() => _i++) : null),

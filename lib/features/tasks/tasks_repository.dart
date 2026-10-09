@@ -57,6 +57,7 @@ class TasksRepository {
   /// (el servidor usa la guardada).
   Future<TaskDetail> close(int id, {
     required String modoCierre,      // 'hora' | 'duracion'
+    DateTime? aperturaInformada,     // solo si el conductor corrigió el inicio
     DateTime? cierreInformada,
     double? horasTotales,
     DateTime? comidaInicio,
@@ -76,6 +77,7 @@ class TasksRepository {
     }
     final res = await api.postJson('/tasks/$id/close', data: {
       'modo_cierre': modoCierre,
+      if (aperturaInformada != null) 'apertura_informada': _fmtUtc(aperturaInformada),
       if (cierreInformada != null) 'cierre_informada': _fmtUtc(cierreInformada),
       if (horasTotales != null) 'horas_totales': horasTotales,
       'comida': comida,
@@ -85,6 +87,17 @@ class TasksRepository {
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
     });
+    return TaskDetail.fromJson(res);
+  }
+  /// v3.1 §5.1 — sobre la MADRE. El servidor recalcula el % y lo propaga a los cargos.
+  Future<TaskDetail> setRecargo(int id, String tipo) async {
+    final res = await api.postJson('/tasks/$id/recargo', data: {'tipo': tipo});
+    return TaskDetail.fromJson(res);
+  }
+
+  /// v3.1 §5.2 — sobre la MADRE. El servidor recalcula el importe de salida.
+  Future<TaskDetail> setSalida(int id, String tipo) async {
+    final res = await api.postJson('/tasks/$id/salida', data: {'tipo': tipo});
     return TaskDetail.fromJson(res);
   }
 

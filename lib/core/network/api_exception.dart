@@ -14,6 +14,7 @@ class ApiException implements Exception {
   bool get upgradeRequired => status == 426 || code == 'upgrade_required';
   bool get sinPermiso => code == 'sin_permiso';
   bool get tareaFirmada => code == 'tarea_firmada';
+  bool get noEditable => code == 'no_editable';
   bool get noEsMadre => code == 'no_es_madre';
   /// Sin respuesta del servidor (sin cobertura, timeout…): ApiClient lo
   /// traduce a 'network_error' sin status HTTP.

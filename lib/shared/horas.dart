@@ -59,7 +59,9 @@ double horasTotalesIniciales({DateTime? apertura, double minimo = 0, DateTime? a
   final now = ahora ?? DateTime.now();
   final double v;
   if (apertura != null && now.isAfter(apertura)) {
-    v = round30(now.difference(apertura).inSeconds / 3600.0);
+    final h = now.difference(apertura).inSeconds / 3600.0;
+    v = h <= umbralOlvidoHoras ? round30(h) : 1.0; // más de 16 h: cierre olvidado
+
   } else if (minimo > 0) {
     v = minimo;
   } else {
@@ -124,4 +126,56 @@ List<DateTime> rejillaComida(DateTime inicio, DateTime fin) {
   final ini = mejor.clamp(0, rejilla.length - 2).toInt();
   final fin = (ini + pasos).clamp(ini + 1, rejilla.length - 1).toInt();
   return (ini, fin);
+}
+/// Por encima de estas horas desde el inicio se entiende cierre olvidado
+/// (mismo umbral que `duracion_sospechosa` del servidor).
+const double umbralOlvidoHoras = 16.0;
+
+double horasDesde(DateTime inicio, {DateTime? ahora}) =>
+    (ahora ?? DateTime.now()).difference(inicio).inSeconds / 3600.0;
+
+/// Inicio de hace 16 h o menos: tienen sentido los atajos Ahora/30 min/1 h.
+bool inicioReciente(DateTime inicio, {DateTime? ahora}) {
+  final h = horasDesde(inicio, ahora: ahora);
+  return h >= 0 && h <= umbralOlvidoHoras;
+}
+
+/// Fin = primera vez que [hora]:[minuto] (hora local) ocurre DESPUÉS de
+/// [inicio]. Igual que `_normalizar_ventana` del servidor, pero anclado al día
+/// de inicio y no al de hoy.
+DateTime finTrasInicio(DateTime inicio, int hora, int minuto) {
+  final ini = inicio.toLocal();
+  final f = DateTime(ini.year, ini.month, ini.day, hora, minuto);
+  return f.isAfter(ini) ? f : DateTime(ini.year, ini.month, ini.day + 1, hora, minuto);
+}
+
+/// Futuro más allá de [toleranciaFuturo].
+bool esFuturo(DateTime d, {DateTime? ahora}) =>
+    d.difference(ahora ?? DateTime.now()) > toleranciaFuturo;
+
+/// Máximo de horas (múltiplo de 0,5 por defecto) desde [inicio] hasta ahora,
+/// acotado a [horasTotalesMin]..[horasTotalesMax]: el fin nunca queda futuro.
+double horasMaxHasta(DateTime inicio, {DateTime? ahora}) {
+  final h = (horasDesde(inicio, ahora: ahora) * 2).floorToDouble() / 2;
+  return h.clamp(horasTotalesMin, horasTotalesMax).toDouble();
+}
+
+DateTime soloDia(DateTime d) {
+  final l = d.toLocal();
+  return DateTime(l.year, l.month, l.day);
+}
+
+String _dos(int n) => n.toString().padLeft(2, '0');
+const _diasSemana = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
+
+/// "06/10"
+String fmtDia(DateTime d) {
+  final l = d.toLocal();
+  return '${_dos(l.day)}/${_dos(l.month)}';
+}
+
+/// "lun 06/10 16:00" (sin intl: no requiere inicializar locales).
+String fmtDiaHora(DateTime d) {
+  final l = d.toLocal();
+  return '${_diasSemana[l.weekday - 1]} ${fmtDia(l)} ${_dos(l.hour)}:${_dos(l.minute)}';
 }

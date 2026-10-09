@@ -4,13 +4,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../shared/duracion_sospechosa.dart';
 import '../../../shared/horas.dart';
+import '../../../shared/horas_totales_dialog.dart';
+import '../../../shared/selector_hora.dart';
 import '../../../shared/location.dart';
 import '../../../shared/pausa_dialog.dart' show fmtHoras;
 import '../../../shared/widgets/upgrade_required.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
 import 'jornada_aviso.dart';
-import 'task_detail_screen.dart' show pickFriendlyTime;
+
 
 String _two(int n) => n.toString().padLeft(2, '0');
 
@@ -192,31 +194,51 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
     }
   }
 
-  /// Hoja de inicio/fin. Primera vez SIN precarga; al modificar, las horas ya
-  /// informadas (el conductor solo corrige lo que está mal).
+  /// Hoja de inicio/duración (v3).
+  /// - Inicio entre el día programado y hoy (lo normal, hoy).
+  /// - Fin: "¿Cuánto duró?" en horas desde el inicio. Máximo = tiempo
+  ///   transcurrido, así el fin nunca es futuro.
+  /// Al modificar, se precargan los valores ya informados.
   Future<({DateTime inicio, DateTime fin})?> _pedirInicioFin(TaskDetail t) {
     DateTime? inicio = t.completada ? t.aperturaInformada : null;
-    DateTime? fin = t.completada ? t.cierreInformada : null;
+    double? duracion = (t.completada && t.aperturaInformada != null && t.cierreInformada != null)
+        ? round30(horasEntre(t.aperturaInformada!, t.cierreInformada!))
+        : null;
+    final desde = t.fechaServicio ?? DateTime.now(); // sin fecha programada: solo hoy
 
     return showModalBottomSheet<({DateTime inicio, DateTime fin})>(
       context: context,
       isScrollControlled: true,
       builder: (sheetCtx) => StatefulBuilder(
         builder: (ctx, setSheet) {
-          Future<void> elegir(bool esInicio) async {
-            final h = await pickFriendlyTime(ctx);
+          Future<void> elegirInicio() async {
+            final h = await pickFechaHoraInicio(ctx, desde: desde, inicial: inicio);
             if (h == null) return;
             setSheet(() {
-              if (esInicio) {
-                inicio = h;
-              } else {
-                fin = h;
+              inicio = h;
+              if (duracion != null) {
+                duracion = duracion!.clamp(horasTotalesMin, horasMaxHasta(h)).toDouble();
               }
             });
           }
 
-          final listo = inicio != null && fin != null;
-          final cruza = listo && !fin!.isAfter(inicio!);
+          Future<void> elegirDuracion() async {
+            final ini = inicio;
+            if (ini == null) return;
+            final res = await pickHorasTotales(
+              ctx,
+              inicial: duracion ?? horasTotalesIniciales(apertura: ini),
+              apertura: ini,
+              titulo: '¿Cuánto duró?',
+              maximo: horasMaxHasta(ini),
+            );
+            if (res == null) return;
+            setSheet(() => duracion = res.horas);
+          }
+
+          final fin = (inicio != null && duracion != null)
+              ? inicio!.add(Duration(minutes: (duracion! * 60).round()))
+              : null;
           return SafeArea(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -227,22 +249,19 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
                   Text(t.completada ? 'Modificar horas' : 'Completar tarea',
                       style: Theme.of(ctx).textTheme.titleMedium),
                   const SizedBox(height: 8),
-                  _selector(ctx, 'Inicio', inicio, () => elegir(true)),
-                  _selector(ctx, 'Fin', fin, () => elegir(false)),
-                  if (listo)
+                  _selector(ctx, 'Inicio', inicio, elegirInicio),
+                  _selectorDuracion(ctx, duracion, inicio == null ? null : elegirDuracion),
+                  if (fin != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 4),
-                      child: Text(
-                        'Duración: ${fmtHoras(horasEntre(inicio!, fin!))}'
-                        '${cruza ? '  (cruza la medianoche)' : ''}',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
+                      child: Text('Fin: ${_diaHora(fin)}',
+                          style: const TextStyle(fontWeight: FontWeight.w600)),
                     ),
                   const SizedBox(height: 12),
                   FilledButton(
                     style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                    onPressed: listo
-                        ? () => Navigator.pop(sheetCtx, (inicio: inicio!, fin: fin!))
+                    onPressed: fin != null
+                        ? () => Navigator.pop(sheetCtx, (inicio: inicio!, fin: fin))
                         : null,
                     child: Text(t.completada ? 'Guardar' : 'Completar'),
                   ),
@@ -259,6 +278,7 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
     );
   }
 
+
   Widget _selector(BuildContext ctx, String label, DateTime? valor, VoidCallback onTap) => ListTile(
         contentPadding: EdgeInsets.zero,
         leading: const Icon(Icons.schedule),
@@ -274,6 +294,21 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
         onTap: onTap,
       );
 
+   Widget _selectorDuracion(BuildContext ctx, double? valor, VoidCallback? onTap) => ListTile(
+        contentPadding: EdgeInsets.zero,
+        enabled: onTap != null, // deshabilitado hasta elegir el inicio
+        leading: const Icon(Icons.timelapse),
+        title: const Text('Duración'),
+        trailing: Text(
+          valor == null ? 'Elegir…' : fmtHoras(valor),
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            color: valor == null && onTap != null ? Theme.of(ctx).colorScheme.primary : null,
+          ),
+        ),
+        onTap: onTap,
+      );
   Future<void> _addComment() async {
     final ctrl = TextEditingController();
     final text = await showDialog<String>(

@@ -22,7 +22,7 @@ Future<T?> ejecutarAccionTarea<T>(
     return await accion();
   } on ApiException catch (e) {
     if (!context.mounted) return null;
-    if (e.sinPermiso || e.tareaFirmada || e.noEsMadre) {
+    if (e.sinPermiso || e.tareaFirmada || e.noEditable || e.noEsMadre) {
       _aviso(context, e.detail ?? _textoPorDefecto(e));
       ref.invalidate(taskDetailProvider(taskId));
       ref.invalidate(tasksListProvider);

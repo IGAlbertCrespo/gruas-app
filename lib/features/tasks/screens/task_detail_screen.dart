@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'deca_section.dart';
 import 'jornada_aviso.dart';
-import '../../../shared/odoo_dt.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../shared/location.dart';
 import '../../../shared/widgets/upgrade_required.dart';
@@ -14,6 +13,7 @@ import '../tasks_providers.dart';
 import '../tasks_repository.dart';
 
 import 'signature_screen.dart';
+import 'conceptos_section.dart';
 import 'cierre_recurso.dart';
 import 'resumen_albaran_view.dart';
 
@@ -174,7 +174,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     try {
       final pendientes = t.recursos.where((r) => r.esMio && r.iniciada && !r.cerrada).toList();
       for (final r in pendientes) {
-        final ok = await cerrarRecursoDialog(context, ref, r);
+        final ok = await cerrarRecursoDialog(context, ref, r, madreId: t.id);
         if (!ok || !mounted) return;
       }
       ref.invalidate(taskDetailProvider(t.id));
@@ -237,8 +237,10 @@ class _Body extends ConsumerWidget {            // ← era StatelessWidget
         ),
         const SizedBox(height: 8),
         Wrap(spacing: 8, runSpacing: 4, children: [
-          if (task.recargo != null)
-            _Tag(icon: Icons.bolt, label: task.recargo!, color: Colors.deepPurple),
+
+          if (task.recargoSel != null ? task.recargoSel!.value != 'none' : task.recargo != null)
+            _Tag(icon: Icons.bolt,
+                label: task.recargoSel?.label ?? task.recargo!, color: Colors.deepPurple),
           if (task.iniciada)
             _Tag(icon: Icons.play_circle, label: 'Iniciada', color: Colors.blue),
           if (task.hasSignature)
@@ -259,7 +261,7 @@ class _Body extends ConsumerWidget {            // ← era StatelessWidget
             _kv('Cierre', task.cierreHora!.toLocal().toString().substring(0, 16)),
         ]),
         DecaSection(deca: task.deca, titulo: task.albaran ?? task.name),
-
+        ConceptosSection(task: task),
         _RecursosSection(madreId: task.id, recursos: task.recursos),
 
         if (task.accesorios.isNotEmpty)
@@ -544,7 +546,7 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
 
   Future<void> _cerrar(Recurso r) async {
         try {
-          final ok = await cerrarRecursoDialog(context, ref, r);
+          final ok = await cerrarRecursoDialog(context, ref, r, madreId: widget.madreId);
           if (ok) {
             ref.invalidate(taskDetailProvider(widget.madreId));
             ref.invalidate(tasksListProvider);

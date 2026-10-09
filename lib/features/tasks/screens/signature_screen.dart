@@ -8,6 +8,7 @@ import '../task_models.dart';
 import '../tasks_providers.dart';
 import 'cierre_recurso.dart';
 import 'resumen_albaran_view.dart';
+import 'conceptos_section.dart';
 import '../../auth/session_controller.dart';
 
 /// Firma del servicio. Muestra el resumen de todos los recursos (editable),
@@ -39,7 +40,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
 
   Future<void> _editarRecurso(Recurso r) async {
     try {
-      final ok = await cerrarRecursoDialog(context, ref, r);
+      final ok = await cerrarRecursoDialog(context, ref, r, madreId: widget.task.id);
       if (ok) ref.invalidate(taskDetailProvider(widget.task.id));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo editar: $e')));
@@ -164,6 +165,8 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           const Text('Resumen del servicio', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 8),
           for (final r in t.recursos) _filaResumen(r),
+          const SizedBox(height: 8),
+          ConceptosSection(task: t, soloLectura: true),
           const Divider(height: 24),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
