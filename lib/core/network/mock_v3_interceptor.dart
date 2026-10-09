@@ -21,6 +21,8 @@ class MockV3Interceptor extends Interceptor {
   static final _complementosRe = RegExp(r'/tasks/(\d+)/complementos$');
   static final _cargosRe = RegExp(r'/tasks/(\d+)/cargos$');
   static final _anularRe = RegExp(r'/tasks/(\d+)/cargos/(\d+)/anular$');
+  static final _firmantesRe = RegExp(r'/tasks/(\d+)/firmantes$');
+  static final _signatureRe = RegExp(r'/tasks/(\d+)/signature$');
 
   static const _candidatos = [
     {'line_id': 9001, 'producto': 'Camión grúa 100 t (mock)', 'cambia_minimo': false},
@@ -41,6 +43,24 @@ class MockV3Interceptor extends Interceptor {
   /// Cargos simulados por tarea (se inicializan con los por defecto).
   final Map<int, List<Map<String, dynamic>>> _cargos = {};
   int _nextCargoId = 900;
+
+  /// Firmantes simulados (por obra no se distingue: basta para QA).
+  /// `documento` aquí se guarda completo; hacia la APP se enmascara.
+  final List<Map<String, dynamic>> _firmantes = [
+    {'id': 5012, 'nombre': 'Joan Puig (mock)', 'documento': '12345678Z', 'movil': '+34600111222'},
+    {'id': 5013, 'nombre': 'Marta Soler (mock)', 'documento': 'X1234567L', 'movil': null},
+  ];
+  int _nextFirmanteId = 6000;
+
+  static Map<String, dynamic> _firmanteApp(Map<String, dynamic> f) {
+    final d = (f['documento'] ?? '') as String;
+    return {
+      'id': f['id'],
+      'nombre': f['nombre'],
+      'documento': d.length > 4 ? '****${d.substring(d.length - 4)}' : d,
+      'movil': f['movil'],
+    };
+  }
 
   List<Map<String, dynamic>> _cargosDe(int id) => _cargos.putIfAbsent(id, () => [
         {'id': 301, 'producto': 'Balancín', 'cantidad': 1.0,
@@ -123,6 +143,40 @@ class MockV3Interceptor extends Interceptor {
       }
       c..['anulado'] = true..['cantidad'] = 0.0..['anulable'] = false;
       return handler.next(_aDetalle(options, m));
+    }
+
+    // GET firmantes de la obra.
+    m = _firmantesRe.firstMatch(path);
+    if (!post && m != null) {
+      return handler.resolve(_ok(options, [for (final f in _firmantes) _firmanteApp(f)]));
+    }
+
+    // POST firmante: si el documento ya existe se devuelve; si no, se crea.
+    if (post && m != null && d is Map) {
+      final doc = (d['documento'] ?? '').toString().toUpperCase().replaceAll(RegExp(r'[\s\-]'), '');
+      if (doc.isEmpty) {
+        return handler.reject(_error(options, 'documento_requerido', 'Falta el documento.'));
+      }
+      var f = _firmantes.where((x) => x['documento'] == doc).firstOrNull;
+      if (f == null) {
+        f = {'id': _nextFirmanteId++, 'nombre': d['nombre'], 'documento': doc, 'movil': null};
+        _firmantes.add(f);
+      }
+      final movil = (d['movil'] ?? '').toString().replaceAll(RegExp(r'[\s\-]'), '');
+      if (movil.isNotEmpty) f['movil'] = movil.startsWith('+') ? movil : '+34$movil';
+      return handler.resolve(_ok(options, _firmanteApp(f)));
+    }
+
+    // POST signature con firmante_id → el servidor v2 no lo conoce: se rellenan
+    // nombre y documento desde el firmante simulado.
+    m = _signatureRe.firstMatch(path);
+    if (post && m != null && d is Map && d['firmante_id'] != null) {
+      final f = _firmantes.where((x) => x['id'] == d['firmante_id']).firstOrNull;
+      if (f != null) {
+        options.data = Map<String, dynamic>.from(d)
+          ..['signer_name'] = f['nombre']
+          ..['dni'] = f['documento'];
+      }
     }
 
     handler.next(options);

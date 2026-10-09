@@ -1,19 +1,32 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:signature/signature.dart';
 
+import '../../../core/network/api_exception.dart';
+import '../../../shared/accion_tarea.dart';
 import '../../../shared/location.dart';
+import '../../../shared/widgets/upgrade_required.dart' show mostrarErrorAccion;
 import '../task_models.dart';
 import '../tasks_providers.dart';
 import 'cierre_recurso.dart';
-import 'resumen_albaran_view.dart';
 import 'conceptos_section.dart';
-import '../../auth/session_controller.dart';
+import 'resumen_albaran_view.dart';
 
-/// Firma del servicio. Muestra el resumen de todos los recursos (editable),
-/// observaciones del cliente, y la firma. Al confirmar: guarda firma + finaliza
-/// la madre (arrastra hijas). Una vez firmada, solo lectura.
+/// Firmantes de la obra de la tarea (CONTRATO §6.1). Requiere conexión.
+final _firmantesProvider =
+    FutureProvider.autoDispose.family<List<Firmante>, int>((ref, taskId) {
+  return ref.read(tasksRepoProvider).firmantes(taskId);
+});
+
+/// Firma del servicio (v3, fase 5).
+///
+/// - Resumen: recursos (re-cerrables) y conceptos en solo lectura.
+/// - Quién firma: un firmante de la obra (firma dibujada obligatoria) u
+///   "Otra persona" (nombre, documento, móvil opcional; regla dos de tres).
+///   Con documento se da de alta como firmante al firmar (POST /firmantes).
+/// - Confirmación final → /signature → /finalize. Una vez firmada, solo lectura.
 class SignatureScreen extends ConsumerStatefulWidget {
   const SignatureScreen({super.key, required this.task});
   final TaskDetail task;
@@ -23,138 +36,168 @@ class SignatureScreen extends ConsumerStatefulWidget {
 
 class _SignatureScreenState extends ConsumerState<SignatureScreen> {
   final _controller = SignatureController(penStrokeWidth: 3, penColor: Colors.black);
-  final _signer = TextEditingController();          // antes: text: ...identificacionSig
-  final _dni = TextEditingController();              // antes: text: ...dniSig
+  final _nombre = TextEditingController();
+  final _documento = TextEditingController();
+  final _movil = TextEditingController();
   late final _obs = TextEditingController(text: widget.task.worksheet.obsCliente ?? '');
   bool _busy = false;
-  bool _ausente = false;
+
+  /// Firmante elegido de la lista; null = "Otra persona" (o aún sin elegir).
+  Firmante? _firmante;
+
+  /// true cuando el conductor ha elegido "Otra persona" (o no hay lista).
+  bool _otraPersona = false;
+
+  int get _id => widget.task.id;
 
   @override
   void dispose() {
     _controller.dispose();
-    _signer.dispose();
-    _dni.dispose();
+    _nombre.dispose();
+    _documento.dispose();
+    _movil.dispose();
     _obs.dispose();
     super.dispose();
   }
 
+  void _snack(String texto) => ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(texto)));
+
   Future<void> _editarRecurso(Recurso r) async {
     try {
-      final ok = await cerrarRecursoDialog(context, ref, r, madreId: widget.task.id);
-      if (ok) ref.invalidate(taskDetailProvider(widget.task.id));
+      final ok = await cerrarRecursoDialog(context, ref, r, madreId: _id);
+      if (ok) ref.invalidate(taskDetailProvider(_id));
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('No se pudo editar: $e')));
+      if (mounted) await mostrarErrorAccion(context, e, prefijo: 'No se pudo editar: ');
     }
   }
 
-  static const _notaAusente = 'Cliente ausente: firma el conductor.';
+  // ─────────────────────────── Documento ───────────────────────────
 
-  void _setAusente(bool v) {
-    setState(() {
-      _ausente = v;
-      if (v) {
-        final conductor =
-            ref.read(sessionControllerProvider).profile?.employeeName ?? 'Conductor';
-        _signer.text = '$conductor (cliente ausente)';
-        _dni.clear();
-        if (!_obs.text.contains(_notaAusente)) {
-          _obs.text = _obs.text.trim().isEmpty ? _notaAusente : '$_notaAusente ${_obs.text.trim()}';
-        }
-      } else {
-        _signer.clear();
-        _obs.text = _obs.text.replaceAll(_notaAusente, '').trim();
-      }
-    });
-  }
+  /// Mayúsculas, sin espacios ni guiones (igual que el servidor).
+  static String _normalizarDoc(String s) => s.toUpperCase().replaceAll(RegExp(r'[\s\-]'), '');
 
-  bool _dniValido(String s) {
-    final t = s.trim().toUpperCase();
-    if (!RegExp(r'^\d{8}[A-Z]$').hasMatch(t)) return false;
+  /// null = no tiene forma de DNI/NIE (se acepta como pasaporte);
+  /// true/false = letra de control correcta o no.
+  static bool? _letraControlOk(String doc) {
     const letras = 'TRWAGMYFPDXBNJZSQVHLCKE';
-    final num = int.parse(t.substring(0, 8));
-    return letras[num % 23] == t[8];
+    String? numero;
+    if (RegExp(r'^\d{8}[A-Z]$').hasMatch(doc)) {
+      numero = doc.substring(0, 8);
+    } else if (RegExp(r'^[XYZ]\d{7}[A-Z]$').hasMatch(doc)) {
+      numero = '${'XYZ'.indexOf(doc[0])}${doc.substring(1, 8)}';
+    }
+    if (numero == null) return null;
+    return letras[int.parse(numero) % 23] == doc[doc.length - 1];
   }
+
+  // ─────────────────────────── Firmar ───────────────────────────
 
   Future<void> _firmarYFinalizar() async {
-    final hayFirma = !_controller.isEmpty;
-    final hayNombre = _signer.text.trim().isNotEmpty;
-    final dni = _dni.text.trim();
-    final hayDni = dni.isNotEmpty;
-    if (_ausente && _controller.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Con el cliente ausente debe firmar el conductor.')));
+    final hayFirma = _controller.isNotEmpty;
+    final firmante = _firmante;
+    final nombre = _nombre.text.trim();
+    final doc = _normalizarDoc(_documento.text);
+    final movil = _movil.text.trim();
+
+    if (firmante == null && !_otraPersona) {
+      _snack('Elige quién firma.');
       return;
     }
-    // Mínimo 2 de 3: firma / nombre / DNI.
-    final n = [hayFirma, hayNombre, hayDni].where((b) => b).length;
-    if (n < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Indica al menos dos datos: firma, nombre o DNI.')));
-      return;
+    if (firmante != null) {
+      // Firmante de la lista: la firma dibujada es obligatoria (§6.2).
+      if (!hayFirma) {
+        _snack('Falta la firma de ${firmante.nombre}.');
+        return;
+      }
+    } else {
+      // Regla dos de tres: firma / nombre / documento.
+      final n = [hayFirma, nombre.isNotEmpty, doc.isNotEmpty].where((b) => b).length;
+      if (n < 2) {
+        _snack('Indica al menos dos datos: firma, nombre o documento.');
+        return;
+      }
+      if (doc.isNotEmpty && _letraControlOk(doc) == false) {
+        final seguir = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Documento'),
+            content: const Text('La letra del documento no es correcta. ¿Continuar de todos modos?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Revisar')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Continuar')),
+            ],
+          ),
+        );
+        if (seguir != true || !mounted) return;
+      }
     }
 
-    // DNI mal formado: avisamos pero permitimos (puede ser NIE/extranjero).
-    if (hayDni && !_dniValido(dni)) {
-      final seguir = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('DNI no estándar'),
-          content: const Text('El DNI introducido no tiene el formato español habitual '
-              '(8 cifras + letra). Si es un documento extranjero (NIE/pasaporte) es normal. '
-              '¿Continuar de todos modos?'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Revisar')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Continuar')),
-          ],
-        ),
-      );
-      if (seguir != true) return;
-    }
-
-    // #4 — confirmación simple
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (ctx) => AlertDialog(
         title: const Text('Confirmar firma'),
         content: const Text('¿Confirma los datos introducidos?\n\n'
             'Una tarea finalizada ya no es modificable.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Revisar')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Confirmar')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Revisar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Confirmar')),
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
 
     setState(() => _busy = true);
     try {
-      final bytes = await _controller.toPngBytes();
-      if (bytes == null) throw Exception('No se pudo generar la imagen.');
+      final bytes = hayFirma ? await _controller.toPngBytes() : null;
       final (lat, lng) = await bestEffortLocation();
+      if (!mounted) return;
       final repo = ref.read(tasksRepoProvider);
-      await repo.saveSignature(
-        widget.task.id,
-        base64Encode(bytes),
-        signerName: _signer.text.trim().isEmpty ? null : _signer.text.trim(),
-        dni: _dni.text.trim(),
-        obsCliente: _obs.text.trim(),
-        lat: lat, lng: lng,
-      );
-      await repo.finalize(widget.task.id, lat: lat, lng: lng); // mueve la madre a Finalizada
-      ref.invalidate(taskDetailProvider(widget.task.id));
-      ref.invalidate(tasksListProvider);
-      if (mounted) Navigator.pop(context);
+
+      final hecho = await ejecutarAccionTarea(context, ref, _id, () async {
+        // "Otra persona" con documento → alta (o vinculación) como firmante.
+        var firmanteId = firmante?.id;
+        if (firmante == null && doc.isNotEmpty) {
+          final nuevo = await repo.crearFirmante(
+            _id,
+            nombre: nombre,
+            documento: doc,
+            movil: movil.isEmpty ? null : movil,
+          );
+          firmanteId = nuevo.id;
+        }
+        await repo.saveSignature(
+          _id,
+          bytes == null ? null : base64Encode(bytes),
+          firmanteId: firmanteId,
+          signerName: firmanteId == null && nombre.isNotEmpty ? nombre : null,
+          obsCliente: _obs.text.trim(),
+          lat: lat,
+          lng: lng,
+        );
+        await repo.finalize(_id, lat: lat, lng: lng); // mueve la madre a Finalizada
+        return true;
+      });
+
+      if (hecho == true) {
+        ref.invalidate(taskDetailProvider(_id));
+        ref.invalidate(tasksListProvider);
+        if (mounted) Navigator.pop(context);
+      }
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      if (mounted) await mostrarErrorAccion(context, e);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
+  // ─────────────────────────── UI ───────────────────────────
+
   @override
   Widget build(BuildContext context) {
     // Madre fresca: refleja las ediciones de recursos hechas aquí.
-    final t = ref.watch(taskDetailProvider(widget.task.id)).valueOrNull ?? widget.task;
+    final t = ref.watch(taskDetailProvider(_id)).valueOrNull ?? widget.task;
     if (t.hasSignature) return _vistaFirmada(t);
 
     return Scaffold(
@@ -162,30 +205,24 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('Resumen del servicio', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          const Text('Resumen del servicio',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 8),
           for (final r in t.recursos) _filaResumen(r),
           const SizedBox(height: 8),
           ConceptosSection(task: t, soloLectura: true),
           const Divider(height: 24),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Cliente ausente'),
-            subtitle: const Text('Firma el conductor y queda anotado en observaciones'),
-            value: _ausente,
-            onChanged: _busy ? null : _setAusente,
+          TextField(
+            controller: _obs,
+            maxLines: 2,
+            decoration: const InputDecoration(labelText: 'Observaciones del cliente'),
           ),
-          TextField(controller: _obs, maxLines: 2,
-              decoration: const InputDecoration(labelText: 'Observaciones del cliente')),
-          const SizedBox(height: 12),
-          TextField(controller: _signer,
-              decoration: const InputDecoration(labelText: 'Nombre de quien firma')),
-          const SizedBox(height: 12),
-          TextField(controller: _dni, textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(labelText: 'DNI de quien firma')),
+          const SizedBox(height: 16),
+          _quienFirma(),
           const SizedBox(height: 16),
           Row(children: [
-            const Text('Firma:', style: TextStyle(color: Colors.black54)),
+            Text(_firmante != null ? 'Firma (obligatoria):' : 'Firma:',
+                style: const TextStyle(color: Colors.black54)),
             const Spacer(),
             TextButton.icon(
               onPressed: () => _controller.clear(),
@@ -195,7 +232,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           ]),
           const SizedBox(height: 6),
           Container(
-            height: 170,                              // antes 220
+            height: 170,
             decoration: BoxDecoration(
               color: Colors.white,
               border: Border.all(color: Colors.black26),
@@ -207,17 +244,122 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           FilledButton.icon(
             onPressed: _busy ? null : _firmarYFinalizar,
             icon: _busy
-                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                ? const SizedBox(
+                    width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.check),
             label: const Text('Confirmar y firmar'),
           ),
-          SizedBox(height: MediaQuery.of(context).padding.bottom + 24),  // ← aire bajo la barra del móvil
+          SizedBox(height: MediaQuery.of(context).padding.bottom + 24),
         ],
       ),
     );
   }
 
-    Widget _filaResumen(Recurso r) {
+  /// Bloque "Quién firma": firmante elegido (visible durante toda la firma),
+  /// lista de firmantes de la obra, o formulario "Otra persona".
+  Widget _quienFirma() {
+    const titulo = Text('Quién firma', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16));
+
+    // Firmante elegido: se muestra fijo con sus datos.
+    final f = _firmante;
+    if (f != null) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        titulo,
+        const SizedBox(height: 8),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.person),
+            title: Text(f.nombre, style: const TextStyle(fontWeight: FontWeight.w600)),
+            subtitle: Text(_datosFirmante(f)),
+            trailing: TextButton(
+              onPressed: _busy ? null : () => setState(() => _firmante = null),
+              child: const Text('Cambiar'),
+            ),
+          ),
+        ),
+      ]);
+    }
+
+    if (_otraPersona) {
+      return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          titulo,
+          const Spacer(),
+          TextButton(
+            onPressed: _busy ? null : () => setState(() => _otraPersona = false),
+            child: const Text('Elegir de la lista'),
+          ),
+        ]),
+        TextField(
+          controller: _nombre,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(labelText: 'Nombre de quien firma'),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _documento,
+          textCapitalization: TextCapitalization.characters,
+          decoration: const InputDecoration(labelText: 'Documento (DNI, NIE o pasaporte)'),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _movil,
+          keyboardType: TextInputType.phone,
+          decoration: const InputDecoration(
+            labelText: 'Móvil (opcional)',
+            helperText: 'Se guarda en el contacto si se indica el documento',
+          ),
+        ),
+      ]);
+    }
+
+    // Lista de firmantes de la obra.
+    final async = ref.watch(_firmantesProvider(_id));
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      titulo,
+      const SizedBox(height: 8),
+      async.when(
+        loading: () => const Padding(
+          padding: EdgeInsets.all(12),
+          child: Center(child: CircularProgressIndicator()),
+        ),
+        error: (e, _) => Text(
+          e is ApiException && e.sinConexion
+              ? 'Sin conexión: no se puede cargar la lista de firmantes.'
+              : 'No se pudo cargar la lista de firmantes.',
+          style: const TextStyle(color: Colors.black54),
+        ),
+        data: (lista) => lista.isEmpty
+            ? const Text('No hay firmantes guardados para esta obra.',
+                style: TextStyle(color: Colors.black54))
+            : Card(
+                child: Column(children: [
+                  for (final x in lista)
+                    ListTile(
+                      leading: const Icon(Icons.person_outline),
+                      title: Text(x.nombre),
+                      subtitle: Text(_datosFirmante(x)),
+                      onTap: _busy ? null : () => setState(() => _firmante = x),
+                    ),
+                ]),
+              ),
+      ),
+      const SizedBox(height: 4),
+      OutlinedButton.icon(
+        onPressed: _busy ? null : () => setState(() => _otraPersona = true),
+        icon: const Icon(Icons.person_add_alt),
+        label: const Text('Otra persona'),
+      ),
+    ]);
+  }
+
+  /// "****567X · 600 111 222"
+  static String _datosFirmante(Firmante f) => [
+        if ((f.documento ?? '').isNotEmpty) f.documento!,
+        if ((f.movil ?? '').isNotEmpty) fmtMovil(f.movil!),
+      ].join(' · ');
+
+  Widget _filaResumen(Recurso r) {
     final res = r.resumenAlbaran;
     return InkWell(
       onTap: r.esMio ? () => _editarRecurso(r) : null,
@@ -231,8 +373,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           if (res != null)
             ResumenAlbaranView(resumen: res)
           else
-            Text(r.cerrada ? 'Cerrado' : 'Sin cerrar',
-                style: const TextStyle(color: Colors.black54)),
+            Text(r.cerrada ? 'Cerrado' : 'Sin cerrar', style: const TextStyle(color: Colors.black54)),
         ]),
       ),
     );
@@ -267,7 +408,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
         ]),
         const SizedBox(height: 16),
         if ((w.identificacionSig ?? '').isNotEmpty) _kv('Firmante', w.identificacionSig!),
-        if ((w.dniSig ?? '').isNotEmpty) _kv('DNI', w.dniSig!),
+        if ((w.dniSig ?? '').isNotEmpty) _kv('Documento', w.dniSig!),
         if (w.firmaHora != null) _kv('Fecha/Hora', w.firmaHora!.toLocal().toString().substring(0, 16)),
         if ((w.obsCliente ?? '').isNotEmpty) _kv('Obs. cliente', w.obsCliente!),
         const SizedBox(height: 16),
@@ -280,10 +421,17 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
             border: Border.all(color: Colors.black26),
             borderRadius: BorderRadius.circular(12),
           ),
-          child: img ?? const Padding(padding: EdgeInsets.all(24),
-              child: Center(child: Text('Firma no disponible.'))),
+          child: img ??
+              const Padding(
+                  padding: EdgeInsets.all(24), child: Center(child: Text('Firma no disponible.'))),
         ),
       ]),
     );
   }
+}
+
+/// E.164 → lectura humana: "+34600111222" → "600 111 222"; otros países tal cual.
+String fmtMovil(String e164) {
+  final m = RegExp(r'^\+34(\d{3})(\d{3})(\d{3})$').firstMatch(e164);
+  return m == null ? e164 : '${m[1]} ${m[2]} ${m[3]}';
 }

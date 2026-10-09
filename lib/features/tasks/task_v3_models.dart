@@ -1,5 +1,30 @@
 import '../../shared/odoo_dt.dart';
 
+/// Firmante de la obra (§6.1). `documento` llega siempre enmascarado;
+/// `movil` en E.164 o null.
+class Firmante {
+  final int id;
+  final String nombre;
+  final String? documento;
+  final String? movil;
+  const Firmante({required this.id, required this.nombre, this.documento, this.movil});
+
+  static Firmante? fromJson(dynamic v) {
+    final j = _obj(v);
+    final id = _int(j?['id']);
+    if (j == null || id == null) return null;
+    return Firmante(
+      id: id,
+      nombre: _txt(j['nombre']) ?? '',
+      documento: _txt(j['documento']),
+      movil: _txt(j['movil']),
+    );
+  }
+
+  static List<Firmante> listFromJson(dynamic v) =>
+      _lista(v).map(Firmante.fromJson).whereType<Firmante>().toList();
+}
+
 /// Bloques v3 del detalle de tarea (CONTRATO_API v3.1 §3 y §4.4).
 ///
 /// Parseo tolerante: bloque ausente o `null` → `null` (o lista vacía).

@@ -183,17 +183,40 @@ class TasksRepository {
     await api.postJson('/tasks/$id/stage', data: {'target': 'informado'});
   }
 
-  /// Firma del cliente: imagen + nombre + observaciones del cliente + GPS.
-  Future<void> saveSignature(int id, String signatureBase64,
-      {String? signerName, String? dni, String? obsCliente, double? lat, double? lng}) async {
+    /// v3.3 §6.2 — sobre la MADRE. Con `firmanteId` el servidor rellena nombre
+  /// y documento desde el contacto (y exige firma dibujada). Sin firma dibujada
+  /// (regla dos de tres) `signatureBase64` es null.
+  Future<void> saveSignature(int id, String? signatureBase64,
+      {int? firmanteId, String? signerName, String? dni, String? obsCliente,
+       double? lat, double? lng}) async {
     await api.postJson('/tasks/$id/signature', data: {
-      'signature': signatureBase64,
+      if (signatureBase64 != null) 'signature': signatureBase64,
+      if (firmanteId != null) 'firmante_id': firmanteId,
       if (signerName != null) 'signer_name': signerName,
-      if (dni != null) 'dni': dni,
+      if (dni != null && dni.isNotEmpty) 'dni': dni,
       if (obsCliente != null) 'obs_cliente': obsCliente,
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
     });
+  }
+
+  /// v3.3 §6.1 — firmantes de la obra de la tarea.
+  Future<List<Firmante>> firmantes(int id) async {
+    final res = await api.getJson('/tasks/$id/firmantes');
+    return Firmante.listFromJson(res['data']);
+  }
+
+  /// v3.3 §6.1 [ONLINE] — alta o vinculación por documento (sin duplicar).
+  Future<Firmante> crearFirmante(int id,
+      {required String nombre, required String documento, String? movil}) async {
+    final res = await api.postJson('/tasks/$id/firmantes', data: {
+      'nombre': nombre,
+      'documento': documento,
+      'movil': movil,
+    });
+    final f = Firmante.fromJson(res);
+    if (f == null) throw Exception('Respuesta de firmante no válida.');
+    return f;
   }
 }
 
