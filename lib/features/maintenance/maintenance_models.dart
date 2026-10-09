@@ -72,6 +72,8 @@ class MaintenanceRequestSummary {
   final String? tipo;
   final String descripcion;
   final int? km;
+  /// v3: horas acumuladas de uso del vehículo al detectar la avería.
+  final double? horasGrua;
   final String? fecha;
   final String? etapa;
   final bool cerrada;
@@ -85,6 +87,7 @@ class MaintenanceRequestSummary {
     this.matricula,
     required this.descripcion,
     this.km,
+    this.horasGrua,
     this.tipo,
     this.fecha,
     this.etapa,
@@ -122,6 +125,9 @@ class MaintenanceRequestSummary {
       tipo: pick(['tipo', 'tipo_averia', 'tipo_averia_name', 'type']),
       descripcion: pick(['descripcion', 'description']) ?? '',
       km: pickInt(['km']),
+      horasGrua: j['horas_grua'] is num
+          ? (j['horas_grua'] as num).toDouble()
+          : double.tryParse('${j['horas_grua'] ?? ''}'.replaceAll(',', '.')),
       fecha: pick(['fecha', 'fecha_deteccion', 'date']),
       etapa: pick(['etapa', 'stage', 'stage_name']),
       cerrada: j['cerrada'] == true || j['closed'] == true,

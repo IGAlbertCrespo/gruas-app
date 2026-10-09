@@ -156,6 +156,9 @@ class _AveriaCard extends StatelessWidget {
               children: [
                 if (item.fecha != null) _meta(Icons.event, item.fecha!),
                 if (item.km != null) _meta(Icons.speed, '${item.km} km'),
+                if (item.horasGrua != null)
+                  _meta(Icons.timer_outlined,
+                      '${item.horasGrua! % 1 == 0 ? item.horasGrua!.toInt() : item.horasGrua} h grúa'),
                 if (item.precisaInmovilizacion)
                   _meta(Icons.block, 'Inmoviliza', color: Colors.red.shade700),
                 if (item.offlineUuid != null && item.id == null)

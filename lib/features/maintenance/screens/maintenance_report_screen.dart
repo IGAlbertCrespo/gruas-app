@@ -37,6 +37,7 @@ class _MaintenanceReportScreenState extends ConsumerState<MaintenanceReportScree
   void dispose() {
     _descCtrl.dispose();
     _kmCtrl.dispose();
+    _horasCtrl.dispose();
     super.dispose();
   }
 
@@ -123,11 +124,15 @@ class _MaintenanceReportScreenState extends ConsumerState<MaintenanceReportScree
     setState(() => _busy = true);
     try {
       final km = _kmCtrl.text.trim().isEmpty ? null : int.tryParse(_kmCtrl.text.trim());
+      final horasTxt = _horasCtrl.text.trim().replaceAll(',', '.');
+      final horasGrua = horasTxt.isEmpty ? null : double.tryParse(horasTxt);
+      final _horasCtrl = TextEditingController();
       final res = await ref.read(maintenanceRepoProvider).create(
             vehicleId: _vehiculo!.id,
             tipoAveriaId: _tipo!.id,
             descripcion: _descCtrl.text.trim(),
             km: km,
+            horasGrua: horasGrua,
             precisaInmovilizacion: widget.catalog.puedeInmovilizar && _inmoviliza,
             fechaDeteccion: _isoDate(_fecha),
             photos: _photo == null ? const [] : [_photo!],
@@ -217,6 +222,20 @@ class _MaintenanceReportScreenState extends ConsumerState<MaintenanceReportScree
                   labelText: 'Kilómetros (opcional)',
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.speed),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _horasCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'^\d*[.,]?\d{0,1}')),
+                ],
+                decoration: const InputDecoration(
+                  labelText: 'Horas de grúa (opcional)',
+                  helperText: 'Lectura del horómetro',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.timer_outlined),
                 ),
               ),
               const SizedBox(height: 16),

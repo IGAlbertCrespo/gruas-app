@@ -53,6 +53,7 @@ class MaintenanceRepository {
     required int tipoAveriaId,
     required String descripcion,
     int? km,
+    double? horasGrua,
     bool precisaInmovilizacion = false,
     String? fechaDeteccion, // 'YYYY-MM-DD'; por defecto, hoy
     List<MaintenancePhoto> photos = const [],
@@ -65,6 +66,7 @@ class MaintenanceRepository {
       'tipo_averia_id': tipoAveriaId,
       'descripcion': descripcion,
       if (km != null) 'km': km,
+      if (horasGrua != null) 'horas_grua': horasGrua,
       'precisa_inmovilizacion': precisaInmovilizacion,
       'fecha_deteccion': fechaDeteccion ?? _today(),
     };
