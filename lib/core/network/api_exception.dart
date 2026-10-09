@@ -15,6 +15,9 @@ class ApiException implements Exception {
   bool get sinPermiso => code == 'sin_permiso';
   bool get tareaFirmada => code == 'tarea_firmada';
   bool get noEditable => code == 'no_editable';
+  /// Lo que la APP mostraba ya no es así (lista desactualizada): refrescar.
+  bool get listaDesactualizada =>
+      code == 'cargo_duplicado' || code == 'cargo_no_anulable' || code == 'linea_no_valida';
   bool get noEsMadre => code == 'no_es_madre';
   /// Sin respuesta del servidor (sin cobertura, timeout…): ApiClient lo
   /// traduce a 'network_error' sin status HTTP.

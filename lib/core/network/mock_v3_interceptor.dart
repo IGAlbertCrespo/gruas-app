@@ -9,36 +9,140 @@ const bool kMockV3 = bool.fromEnvironment('MOCK_V3');
 ///
 /// Regla: solo AÑADE claves AUSENTES (`putIfAbsent`). En cuanto el servidor
 /// envía la clave (aunque sea `null`, como en las tareas hija), manda el servidor.
+///
+/// Las acciones v3 (recargo, salida, servicio, cargos) se simulan en memoria
+/// mientras la APP está abierta y se convierten en `GET /tasks/<id>` para que
+/// la respuesta sea el detalle real completado.
 class MockV3Interceptor extends Interceptor {
   static final _close = RegExp(r'/tasks/\d+/close$');
   static final _selRe = RegExp(r'/tasks/(\d+)/(recargo|salida)$');
+  static final _serviciosRe = RegExp(r'/tasks/(\d+)/servicios$');
+  static final _servicioRe = RegExp(r'/tasks/(\d+)/servicio$');
+  static final _complementosRe = RegExp(r'/tasks/(\d+)/complementos$');
+  static final _cargosRe = RegExp(r'/tasks/(\d+)/cargos$');
+  static final _anularRe = RegExp(r'/tasks/(\d+)/cargos/(\d+)/anular$');
 
-  /// Selecciones hechas en la APP mientras está abierta: {taskId: {campo: value}}.
+  static const _candidatos = [
+    {'line_id': 9001, 'producto': 'Camión grúa 100 t (mock)', 'cambia_minimo': false},
+    {'line_id': 9002, 'producto': 'Grúa móvil 200 t (mock)', 'cambia_minimo': true},
+  ];
+  static const _catalogo = [
+    {'product_id': 77, 'producto': 'Balancín'},
+    {'product_id': 78, 'producto': 'Ventosa'},
+    {'product_id': 79, 'producto': 'Eslingas'},
+  ];
+
+  /// Recargo/salida elegidos: {taskId: {campo: value}}.
   final Map<int, Map<String, String>> _sel = {};
+
+  /// Servicio principal elegido: {taskId: producto}.
+  final Map<int, String> _servicio = {};
+
+  /// Cargos simulados por tarea (se inicializan con los por defecto).
+  final Map<int, List<Map<String, dynamic>>> _cargos = {};
+  int _nextCargoId = 900;
+
+  List<Map<String, dynamic>> _cargosDe(int id) => _cargos.putIfAbsent(id, () => [
+        {'id': 301, 'producto': 'Balancín', 'cantidad': 1.0,
+         'anulado': false, 'origen': 'planificado', 'anulable': true},
+      ]);
 
   // ─────────────────────────── Peticiones ───────────────────────────
 
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     final d = options.data;
-    if (options.method == 'POST' && _close.hasMatch(options.path) &&
-        d is Map<String, dynamic> && d.containsKey('modo_cierre')) {
+    final post = options.method == 'POST';
+    final path = options.path;
+
+    if (post && _close.hasMatch(path) && d is Map<String, dynamic> && d.containsKey('modo_cierre')) {
       options.data = _closeV3aV2(d);
+      return handler.next(options);
     }
 
-    // POST /tasks/<id>/recargo|salida → se recuerda la elección y se convierte
-    // en GET /tasks/<id> (el servidor v2 no tiene la ruta). Al inyectar el
-    // detalle se aplica la elección.
-    final m = _selRe.firstMatch(options.path);
-    if (options.method == 'POST' && m != null && d is Map && d['tipo'] is String) {
+    // POST recargo|salida → se recuerda y se pide el detalle.
+    var m = _selRe.firstMatch(path);
+    if (post && m != null && d is Map && d['tipo'] is String) {
       _sel.putIfAbsent(int.parse(m[1]!), () => {})[m[2]!] = d['tipo'] as String;
-      options
-        ..method = 'GET'
-        ..path = '${options.path.substring(0, m.start)}/tasks/${m[1]}'
-        ..data = null;
+      return handler.next(_aDetalle(options, m));
     }
+
+    // GET candidatos de servicio.
+    m = _serviciosRe.firstMatch(path);
+    if (!post && m != null) return handler.resolve(_ok(options, _candidatos));
+
+    // POST servicio.
+    m = _servicioRe.firstMatch(path);
+    if (post && m != null && d is Map) {
+      final cand = _candidatos.where((c) => c['line_id'] == d['line_id']).firstOrNull;
+      if (cand == null) {
+        return handler.reject(_error(options, 'linea_no_valida', 'La línea no es candidata.'));
+      }
+      if (cand['cambia_minimo'] == true && d['confirmar'] != true) {
+        return handler.reject(_error(options, 'cambio_minimo',
+            'El servicio nuevo tiene un servicio mínimo distinto al actual.'));
+      }
+      _servicio[int.parse(m[1]!)] = cand['producto'] as String;
+      return handler.next(_aDetalle(options, m));
+    }
+
+    // GET complementos = catálogo menos los cargos activos.
+    m = _complementosRe.firstMatch(path);
+    if (!post && m != null) {
+      final activos = _cargosDe(int.parse(m[1]!))
+          .where((c) => c['anulado'] != true)
+          .map((c) => c['producto'])
+          .toSet();
+      return handler.resolve(
+          _ok(options, _catalogo.where((p) => !activos.contains(p['producto'])).toList()));
+    }
+
+    // POST añadir cargo.
+    m = _cargosRe.firstMatch(path);
+    if (post && m != null && d is Map) {
+      final id = int.parse(m[1]!);
+      final prod = _catalogo.where((p) => p['product_id'] == d['product_id']).firstOrNull;
+      final lista = _cargosDe(id);
+      if (prod == null ||
+          lista.any((c) => c['producto'] == prod['producto'] && c['anulado'] != true)) {
+        return handler.reject(_error(options, 'cargo_duplicado', 'El complemento ya está en la tarea.'));
+      }
+      lista.add({'id': _nextCargoId++, 'producto': prod['producto'], 'cantidad': 1.0,
+                 'anulado': false, 'origen': 'app', 'anulable': true});
+      return handler.next(_aDetalle(options, m));
+    }
+
+    // POST anular cargo.
+    m = _anularRe.firstMatch(path);
+    if (post && m != null) {
+      final c = _cargosDe(int.parse(m[1]!))
+          .where((c) => c['id'] == int.parse(m![2]!))
+          .firstOrNull;
+      if (c == null || c['anulado'] == true) {
+        return handler.reject(_error(options, 'cargo_no_anulable', 'El cargo no se puede anular.'));
+      }
+      c..['anulado'] = true..['cantidad'] = 0.0..['anulable'] = false;
+      return handler.next(_aDetalle(options, m));
+    }
+
     handler.next(options);
   }
+
+  /// Convierte la petición en `GET /tasks/<id>` (prefijo de la ruta conservado).
+  RequestOptions _aDetalle(RequestOptions o, RegExpMatch m) => o
+    ..method = 'GET'
+    ..path = '${o.path.substring(0, m.start)}/tasks/${m[1]}'
+    ..data = null;
+
+  Response _ok(RequestOptions o, Object data) =>
+      Response(requestOptions: o, statusCode: 200, data: data);
+
+  DioException _error(RequestOptions o, String code, String detail) => DioException(
+        requestOptions: o,
+        type: DioExceptionType.badResponse,
+        response: Response(
+            requestOptions: o, statusCode: 422, data: {'error': code, 'detail': detail}),
+      );
 
   /// Body v3 de /close → v2 (pausa + modo) para probar contra un servidor v2.
   /// Limitación: sin incidencia se envía 'normal'; el v2 no decide el mínimo.
@@ -99,9 +203,12 @@ class MockV3Interceptor extends Interceptor {
   void _detalle(Map<String, dynamic> t) {
     // Solo se simula lo que el servidor NO envía.
     final simular = {
+      'servicio': !t.containsKey('servicio'),
       'recargo': !t.containsKey('recargo'),
       'salida': !t.containsKey('salida'),
+      'cargos': !t.containsKey('cargos'),
     };
+    final id = t['id'] is int ? t['id'] as int : null;
 
     final partner = t['partner'];
     t.putIfAbsent('obra', () => partner is Map
@@ -110,7 +217,7 @@ class MockV3Interceptor extends Interceptor {
 
     t.putIfAbsent('servicio', () => <String, dynamic>{
           'sale_line_id': 4411,
-          'producto': 'Camión grúa 80 t (mock)',
+          'producto': (id != null ? _servicio[id] : null) ?? 'Camión grúa 80 t (mock)',
           'editable': true,
         });
 
@@ -134,16 +241,13 @@ class MockV3Interceptor extends Interceptor {
           'opciones': [
             {'value': 'salida', 'label': 'Salida'},
             {'value': 'coche', 'label': 'Coche'},
-            {'value': 'none', 'label': 'Sin salida'}, // v3.2
+            {'value': 'none', 'label': 'Sin salida'},
           ],
         });
 
-    t.putIfAbsent('cargos', () => [
-          {'id': 301, 'producto': 'Balancín', 'cantidad': 1.0,
-           'anulado': false, 'origen': 'planificado', 'anulable': true},
-          {'id': 305, 'producto': 'Ventosa', 'cantidad': 1.0,
-           'anulado': false, 'origen': 'app', 'anulable': true},
-        ]);
+    if (simular['cargos'] == true && id != null) {
+      t['cargos'] = [for (final c in _cargosDe(id)) Map<String, dynamic>.from(c)];
+    }
 
     t.putIfAbsent('firma', () => <String, dynamic>{
           'falta_firma': false,

@@ -249,3 +249,29 @@ class ResumenAlbaran {
     );
   }
 }
+/// Candidato a servicio principal (§5.3). `cambiaMinimo` no se usa en la APP:
+/// el conductor no recibe avisos de mínimos.
+class CandidatoServicio {
+  final int lineId;
+  final String producto;
+  const CandidatoServicio({required this.lineId, required this.producto});
+
+  static List<CandidatoServicio> listFromJson(dynamic v) => [
+        for (final j in _lista(v))
+          if (_int(j['line_id']) != null)
+            CandidatoServicio(lineId: _int(j['line_id'])!, producto: _txt(j['producto']) ?? ''),
+      ];
+}
+
+/// Complemento disponible para añadir (§5.4).
+class Complemento {
+  final int productId;
+  final String producto;
+  const Complemento({required this.productId, required this.producto});
+
+  static List<Complemento> listFromJson(dynamic v) => [
+        for (final j in _lista(v))
+          if (_int(j['product_id']) != null)
+            Complemento(productId: _int(j['product_id'])!, producto: _txt(j['producto']) ?? ''),
+      ];
+}

@@ -100,6 +100,34 @@ class TasksRepository {
     final res = await api.postJson('/tasks/$id/salida', data: {'tipo': tipo});
     return TaskDetail.fromJson(res);
   }
+    /// v3.3 §5.3 — candidatos a servicio principal (madre).
+  Future<List<CandidatoServicio>> servicios(int id) async {
+    final res = await api.getJson('/tasks/$id/servicios');
+    return CandidatoServicio.listFromJson(res['data']);
+  }
+
+  /// v3.3 §5.3 — la APP envía siempre confirmar: true (sin avisos de mínimo).
+  Future<TaskDetail> cambiarServicio(int id, int lineId, {bool confirmar = true}) async {
+    final res = await api.postJson('/tasks/$id/servicio',
+        data: {'line_id': lineId, 'confirmar': confirmar});
+    return TaskDetail.fromJson(res);
+  }
+
+  /// v3.3 §5.4 — complementos disponibles (sin los ya activos).
+  Future<List<Complemento>> complementos(int id) async {
+    final res = await api.getJson('/tasks/$id/complementos');
+    return Complemento.listFromJson(res['data']);
+  }
+
+  Future<TaskDetail> anadirCargo(int id, int productId) async {
+    final res = await api.postJson('/tasks/$id/cargos', data: {'product_id': productId});
+    return TaskDetail.fromJson(res);
+  }
+
+  Future<TaskDetail> anularCargo(int id, int cargoId) async {
+    final res = await api.postJson('/tasks/$id/cargos/$cargoId/anular');
+    return TaskDetail.fromJson(res);
+  }
 
   /// Completa una NO FACTURABLE con inicio/fin informados. Repetible en el día.
   /// El servidor aplica la regla de medianoche y el umbral de 16 h, y puede
