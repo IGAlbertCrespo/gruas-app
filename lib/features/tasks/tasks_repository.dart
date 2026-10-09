@@ -156,13 +156,51 @@ class TasksRepository {
   }
 
 
-  /// Finaliza el servicio: mueve la madre a Finalizada (arrastra hijas).
-  Future<TaskDetail> finalize(int id, {double? lat, double? lng}) async {
+    /// Finaliza la madre. Con `firmaDiferida` (§6.3) finaliza sin firma y el
+  /// servidor genera la solicitud de firma.
+  Future<TaskDetail> finalize(int id, {bool firmaDiferida = false, double? lat, double? lng}) async {
     final res = await api.postJson('/tasks/$id/finalize', data: {
+      if (firmaDiferida) 'firma_diferida': true,
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
     });
     return TaskDetail.fromJson(res);
+  }
+
+  /// v3.3 §6.4 — madres propias de la misma obra, finalizadas sin firmar.
+  Future<List<PendienteFirma>> pendientesFirma(int id) async {
+    final res = await api.getJson('/tasks/$id/pendientes-firma');
+    return PendienteFirma.listFromJson(res['data']);
+  }
+
+  /// v3.3 §6.5 [ONLINE] — firma en lote. Devuelve el código del lote.
+  Future<String> firmarLote(List<int> taskIds, String? signatureBase64,
+      {int? firmanteId, String? signerName, String? dni, String? obsCliente,
+       double? lat, double? lng}) async {
+    final res = await api.postJson('/firma/lote', data: {
+      'task_ids': taskIds,
+      if (signatureBase64 != null) 'signature': signatureBase64,
+      if (firmanteId != null) 'firmante_id': firmanteId,
+      if (signerName != null) 'signer_name': signerName,
+      if (dni != null && dni.isNotEmpty) 'dni': dni,
+      if (obsCliente != null) 'obs_cliente': obsCliente,
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
+    });
+    return res['lote']?.toString() ?? '';
+  }
+
+  /// v3.3 §6.6 [ONLINE] — crea el enlace de firma (anula los vivos previos).
+  Future<SolicitudCreada> crearSolicitudFirma(List<int> taskIds,
+      {int? firmanteId, required String movil}) async {
+    final res = await api.postJson('/firma/solicitudes', data: {
+      'task_ids': taskIds,
+      if (firmanteId != null) 'firmante_id': firmanteId,
+      'movil': movil,
+    });
+    final s = SolicitudCreada.fromJson(res);
+    if (s == null) throw Exception('Respuesta de solicitud no válida.');
+    return s;
   }
 
   /// Pausa la tarea: cierra el tramo abierto (no cambia de etapa).

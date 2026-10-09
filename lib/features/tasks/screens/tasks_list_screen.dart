@@ -7,6 +7,7 @@ import '../task_models.dart';
 import '../tasks_providers.dart';
 import 'task_detail_screen.dart';
 import 'non_billable_detail_screen.dart';
+import '../../../shared/horas.dart' show fmtDia;
 import '../../../shared/widgets/upgrade_required.dart';
 
 class TasksListScreen extends ConsumerWidget {
@@ -59,27 +60,41 @@ class TasksListScreen extends ConsumerWidget {
               ]),
               data: (res) {
                 // No facturables: completada = marcada por el conductor (sin firma).
-                final tasks = res.tasks.where((t) {
-                  final completada =
-                      t.esNoFacturable ? t.completada : (t.cerrada && t.hasSignature);
-                  return view == 'completadas' ? completada : !completada;
-                }).toList();
-                if (tasks.isEmpty) {
-                  return ListView(children: [
-                    Padding(
-                      padding: const EdgeInsets.all(40),
-                      child: Center(child: Text(
-                        view == 'completadas' ? 'No hay tareas completadas.' : 'No hay tareas pendientes.')),
-                    ),
-                  ]);
+                // Facturables: completada = cerrada y firmada.
+                bool completada(TaskSummary t) =>
+                    t.esNoFacturable ? t.completada : (t.cerrada && t.hasSignature);
+                final readOnly = scope == 'all' && isManager;
+
+                if (view == 'completadas') {
+                  final tasks = res.tasks.where(completada).toList();
+                  if (tasks.isEmpty) return _vacio('No hay tareas completadas.');
+                  return ListView(
+                    padding: const EdgeInsets.all(12),
+                    children: [for (final t in tasks) _TaskCard(task: t, readOnly: readOnly)],
+                  );
                 }
-                return ListView.builder(
+
+                // Pendientes en dos bloques: arriba lo que hay que hacer; abajo
+                // los servicios finalizados que esperan la firma del cliente.
+                final pendientes = res.tasks.where((t) => !completada(t)).toList();
+                final paraHacer = pendientes.where((t) => !t.faltaFirma).toList();
+                final sinFirma = pendientes.where((t) => t.faltaFirma).toList()
+                  ..sort((a, b) => (a.fechaServicio ?? DateTime(2000))
+                      .compareTo(b.fechaServicio ?? DateTime(2000)));
+                if (pendientes.isEmpty) return _vacio('No hay tareas pendientes.');
+
+                return ListView(
                   padding: const EdgeInsets.all(12),
-                  itemCount: tasks.length,
-                  itemBuilder: (_, i) => _TaskCard(
-                    task: tasks[i],
-                    readOnly: scope == 'all' && isManager,
-                  ),
+                  children: [
+                    if (paraHacer.isNotEmpty) ...[
+                      _Cabecera(texto: 'Para hacer', n: paraHacer.length),
+                      for (final t in paraHacer) _TaskCard(task: t, readOnly: readOnly),
+                    ],
+                    if (sinFirma.isNotEmpty) ...[
+                      _Cabecera(texto: 'Pendientes de firma', n: sinFirma.length, color: Colors.red),
+                      for (final t in sinFirma) _TaskCard(task: t, readOnly: readOnly),
+                    ],
+                  ],
                 );
               },
             ),
@@ -100,7 +115,11 @@ class _TaskCard extends StatelessWidget {
     if (task.esNoFacturable) return _NoFacturableCard(task: task, readOnly: readOnly);
     final route = [task.cargaPoblacion, task.descargaPoblacion].where((e) => e != null && e.isNotEmpty);
     final enProceso = task.iniciada && !task.cerrada;
-    final pteFirma = task.cerrada && !task.hasSignature;
+    final pteFirma = task.faltaFirma;
+    final sol = task.solicitudFirma;
+    final enlace = sol != null && sol.viva
+        ? 'ENLACE ENVIADO${sol.expira != null ? ' · CADUCA ${fmtDia(sol.expira!)}' : ''}'
+        : null;
     return Card(
       color: enProceso ? Colors.green.shade50 : null,
       child: ListTile(
@@ -115,7 +134,11 @@ class _TaskCard extends StatelessWidget {
             if (enProceso)
               const _StatusBadge(text: 'EN PROCESO', color: Colors.green, icon: Icons.play_circle)
             else if (pteFirma)
-              const _StatusBadge(text: 'PTE. FIRMA', color: Colors.red, icon: Icons.draw),
+              _StatusBadge(
+                text: enlace ?? 'PTE. FIRMA',
+                color: enlace != null ? Colors.orange : Colors.red,
+                icon: enlace != null ? Icons.send : Icons.draw,
+              ),
             if (task.horaSalida != null)
               Text('Salida: ${task.horaSalida!.toLocal().toString().substring(0, 16)}',
                   style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -210,6 +233,33 @@ class _NoFacturableCard extends StatelessWidget {
         ),
         trailing: task.completada ? const Icon(Icons.check_circle, color: Colors.green) : null,
       ),
+    );
+  }
+}
+
+Widget _vacio(String texto) => ListView(children: [
+      Padding(padding: const EdgeInsets.all(40), child: Center(child: Text(texto))),
+    ]);
+
+/// Cabecera de bloque en la lista de pendientes: "── Para hacer (3) ──".
+class _Cabecera extends StatelessWidget {
+  const _Cabecera({required this.texto, required this.n, this.color});
+  final String texto;
+  final int n;
+  final MaterialColor? color;
+  @override
+  Widget build(BuildContext context) {
+    final c = color?.shade700 ?? Theme.of(context).colorScheme.primary;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 12, 4, 6),
+      child: Row(children: [
+        Expanded(child: Divider(color: c)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text('$texto ($n)', style: TextStyle(fontWeight: FontWeight.bold, color: c)),
+        ),
+        Expanded(child: Divider(color: c)),
+      ]),
     );
   }
 }

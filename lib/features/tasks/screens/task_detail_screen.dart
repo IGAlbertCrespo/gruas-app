@@ -16,6 +16,7 @@ import 'signature_screen.dart';
 import 'conceptos_section.dart';
 import 'cierre_recurso.dart';
 import 'resumen_albaran_view.dart';
+import 'enlace_firma.dart';
 
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
@@ -135,7 +136,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
   // ---------- Acciones ----------
 
-  Widget? _actionsBar(TaskDetail t) {
+    Widget? _actionsBar(TaskDetail t) {
     final parts = <Widget>[];
     if (t.hasSignature) {
       parts.add(OutlinedButton.icon(
@@ -144,8 +145,26 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         icon: const Icon(Icons.visibility),
         label: const Text('Ver firma'),
       ));
-    }
-    if (t.stage.alias != 'Finalizada') {
+    } else if (t.firma?.faltaFirma == true) {
+      // Finalizada sin firma: firmar en persona (o en lote) o enviar el enlace.
+      parts.add(OutlinedButton.icon(
+        onPressed: _busy ? null : () => enviarEnlaceFirma(context, ref, t.id),
+        icon: const Icon(Icons.send),
+        label: const Text('Enviar enlace'),
+      ));
+      parts.add(FilledButton.icon(
+        onPressed: _busy
+            ? null
+            : () async {
+                await Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => SignatureScreen(task: t)));
+                ref.invalidate(taskDetailProvider(t.id));
+                ref.invalidate(tasksListProvider);
+              },
+        icon: const Icon(Icons.draw),
+        label: const Text('Firmar'),
+      ));
+    } else if (t.stage.alias != 'Finalizada') {
       parts.add(FilledButton.icon(
         style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
         onPressed: _busy ? null : () => _finalizarTarea(t),
@@ -245,6 +264,16 @@ class _Body extends ConsumerWidget {            // ← era StatelessWidget
             _Tag(icon: Icons.play_circle, label: 'Iniciada', color: Colors.blue),
           if (task.hasSignature)
             _Tag(icon: Icons.draw, label: 'Firmada', color: Colors.green),
+          if (task.firma?.faltaFirma == true)
+            _Tag(
+              icon: task.firma?.solicitud?.viva == true ? Icons.send : Icons.draw,
+              label: task.firma?.solicitud?.viva == true
+                  ? 'Enlace enviado${task.firma!.solicitud!.expira != null ? ' · caduca ${fmtDia(task.firma!.solicitud!.expira!)}' : ''}'
+                  : 'Pendiente de firma',
+              color: Colors.red,
+            ),
+          if (task.firma?.lote != null)
+            _Tag(icon: Icons.layers, label: 'Lote ${task.firma!.lote!.codigo}', color: Colors.green),
         ]),
         const SizedBox(height: 8),
 

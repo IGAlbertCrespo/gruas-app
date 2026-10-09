@@ -34,6 +34,10 @@ class TaskSummary {
   final String tipo;
   /// En no facturables el servidor iguala cerrada = completada.
   final bool completada;
+    /// v3: finalizada sin firma (bloque `firma` del resumen).
+  final bool faltaFirma;
+  /// v3: última solicitud de firma (enlace), o null.
+  final SolicitudFirma? solicitudFirma;
 
   const TaskSummary({
     required this.id,
@@ -54,6 +58,8 @@ class TaskSummary {
     this.tipo = 'servicio',
     this.completada = false,
     this.tipoInterna,
+    this.faltaFirma = false,
+    this.solicitudFirma,
   });
   bool get esNoFacturable => tipo == 'no_facturable';
   static String? _nm(dynamic v) => v is Map ? v['name']?.toString() : null;
@@ -79,6 +85,10 @@ class TaskSummary {
         completada: j['completada'] == true ||
             ((j['tipo']?.toString() == 'no_facturable') && j['cerrada'] == true),
         tipoInterna: _recargo(j['tipo_interna']),   // mismo formato {value, label}
+        faltaFirma: (j['firma'] is Map) && (j['firma'] as Map)['falta_firma'] == true,
+        solicitudFirma: j['firma'] is Map
+            ? SolicitudFirma.fromJson((j['firma'] as Map)['solicitud'])
+            : null,
       );
 }
 
@@ -245,6 +255,8 @@ class TaskDetail extends TaskSummary {
     super.tipo,
     super.completada,
     super.tipoInterna,
+    super.faltaFirma,
+    super.solicitudFirma,
     required this.carga,
     required this.descarga,
     required this.worksheet,
@@ -293,6 +305,8 @@ class TaskDetail extends TaskSummary {
       tipo: s.tipo,
       completada: s.completada,
       tipoInterna: s.tipoInterna,
+      faltaFirma: s.faltaFirma,
+      solicitudFirma: s.solicitudFirma,
       deca: Deca.fromJson(j['deca']),
       obra: Obra.fromJson(j['obra']),
       servicio: ServicioPrincipal.fromJson(j['servicio']),

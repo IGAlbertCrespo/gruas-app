@@ -300,3 +300,60 @@ class Complemento {
             Complemento(productId: _int(j['product_id'])!, producto: _txt(j['producto']) ?? ''),
       ];
 }
+/// Albarán pendiente de firma de la misma obra (§6.4).
+class PendienteFirma {
+  final int id;
+  final String? albaran;
+  final DateTime? fecha;
+  final String? servicio;
+  final List<Cargo> cargos;
+  final String? recargo;
+  final String? salida;
+  final ResumenAlbaran? resumenAlbaran;
+  const PendienteFirma({
+    required this.id,
+    this.albaran,
+    this.fecha,
+    this.servicio,
+    this.cargos = const [],
+    this.recargo,
+    this.salida,
+    this.resumenAlbaran,
+  });
+
+  /// Acepta objeto ({producto} / {label}) o texto.
+  static String? _etiqueta(dynamic v, String clave) =>
+      v is Map ? _txt(v[clave]) : _txt(v);
+
+  static List<PendienteFirma> listFromJson(dynamic v) => [
+        for (final j in _lista(v))
+          if (_int(j['id']) != null)
+            PendienteFirma(
+              id: _int(j['id'])!,
+              albaran: _txt(j['albaran']),
+              fecha: _dt(j['fecha']),
+              servicio: _etiqueta(j['servicio'], 'producto'),
+              cargos: Cargo.listFromJson(j['cargos']),
+              recargo: _etiqueta(j['recargo'], 'label'),
+              salida: _etiqueta(j['salida'], 'label'),
+              resumenAlbaran: ResumenAlbaran.fromJson(j['resumen_albaran']),
+            ),
+      ];
+}
+
+/// Respuesta de POST /firma/solicitudes (§6.6).
+class SolicitudCreada {
+  final int id;
+  final String url;
+  final DateTime? expira;
+  final String? mensaje;
+  const SolicitudCreada({required this.id, required this.url, this.expira, this.mensaje});
+
+  static SolicitudCreada? fromJson(dynamic v) {
+    final j = _obj(v);
+    final id = _int(j?['id']);
+    final url = _txt(j?['url']);
+    if (j == null || id == null || url == null) return null;
+    return SolicitudCreada(id: id, url: url, expira: _dt(j['expira']), mensaje: _txt(j['mensaje']));
+  }
+}

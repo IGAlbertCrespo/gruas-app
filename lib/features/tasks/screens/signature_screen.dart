@@ -8,10 +8,13 @@ import '../../../core/network/api_exception.dart';
 import '../../../shared/accion_tarea.dart';
 import '../../../shared/location.dart';
 import '../../../shared/widgets/upgrade_required.dart' show mostrarErrorAccion;
+import '../../auth/session_controller.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
+import '../../../shared/horas.dart' show fmtDia;
 import 'cierre_recurso.dart';
 import 'conceptos_section.dart';
+import 'enlace_firma.dart';
 import 'resumen_albaran_view.dart';
 
 /// Firmantes de la obra de la tarea (CONTRATO §6.1). Requiere conexión.
@@ -20,13 +23,27 @@ final _firmantesProvider =
   return ref.read(tasksRepoProvider).firmantes(taskId);
 });
 
-/// Firma del servicio (v3, fase 5).
+/// Otros albaranes de la misma obra pendientes de firma (§6.4). Sin conexión
+/// o con error, simplemente no se ofrece la firma en lote.
+final _pendientesProvider =
+    FutureProvider.autoDispose.family<List<PendienteFirma>, int>((ref, taskId) {
+  return ref.read(tasksRepoProvider).pendientesFirma(taskId);
+});
+
+/// Firma del servicio (v3, fases 5 y 6).
 ///
-/// - Resumen: recursos (re-cerrables) y conceptos en solo lectura.
+/// - Resumen: recursos (re-cerrables mientras no esté finalizada) y conceptos
+///   en solo lectura.
+/// - Otros albaranes pendientes de la obra: si se marcan, se firma en lote
+///   (POST /firma/lote) con el mismo firmante, observaciones y firma.
 /// - Quién firma: un firmante de la obra (firma dibujada obligatoria) u
 ///   "Otra persona" (nombre, documento, móvil opcional; regla dos de tres).
 ///   Con documento se da de alta como firmante al firmar (POST /firmantes).
-/// - Confirmación final → /signature → /finalize. Una vez firmada, solo lectura.
+/// - "Confirmar y firmar": /signature (+ /finalize si aún no está finalizada),
+///   o /firma/lote si hay otros albaranes marcados.
+/// - "Firmar más tarde" (permiso firma_diferida): /finalize diferido y
+///   ofrecimiento de enviar el enlace por WhatsApp.
+/// Una vez firmada, solo lectura.
 class SignatureScreen extends ConsumerStatefulWidget {
   const SignatureScreen({super.key, required this.task});
   final TaskDetail task;
@@ -48,7 +65,13 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
   /// true cuando el conductor ha elegido "Otra persona" (o no hay lista).
   bool _otraPersona = false;
 
+  /// Otros albaranes pendientes marcados para firmar en lote.
+  final Set<int> _lote = {};
+
   int get _id => widget.task.id;
+
+  /// Madre fresca (refleja ediciones de recursos y el estado de firma).
+  TaskDetail get _tarea => ref.read(taskDetailProvider(_id)).valueOrNull ?? widget.task;
 
   @override
   void dispose() {
@@ -134,12 +157,16 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
       }
     }
 
+    final n = _lote.length + 1;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Confirmar firma'),
-        content: const Text('¿Confirma los datos introducidos?\n\n'
-            'Una tarea finalizada ya no es modificable.'),
+        content: Text(n > 1
+            ? '¿Confirma los datos introducidos?\n\nSe firmarán $n albaranes con la misma firma. '
+                'Un servicio finalizado ya no es modificable.'
+            : '¿Confirma los datos introducidos?\n\n'
+                'Una tarea finalizada ya no es modificable.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Revisar')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Confirmar')),
@@ -148,6 +175,9 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
     );
     if (ok != true || !mounted) return;
 
+    final yaFinalizada = _tarea.firma?.faltaFirma == true;
+    final otros = _lote.toList();
+
     setState(() => _busy = true);
     try {
       final bytes = hayFirma ? await _controller.toPngBytes() : null;
@@ -155,7 +185,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
       if (!mounted) return;
       final repo = ref.read(tasksRepoProvider);
 
-      final hecho = await ejecutarAccionTarea(context, ref, _id, () async {
+      final lote = await ejecutarAccionTarea(context, ref, _id, () async {
         // "Otra persona" con documento → alta (o vinculación) como firmante.
         var firmanteId = firmante?.id;
         if (firmante == null && doc.isNotEmpty) {
@@ -167,24 +197,94 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           );
           firmanteId = nuevo.id;
         }
+        final firma = bytes == null ? null : base64Encode(bytes);
+        final signer = firmanteId == null && nombre.isNotEmpty ? nombre : null;
+
+        if (otros.isNotEmpty) {
+          // Lote: el servidor firma todas y finaliza la actual si solo está cerrada.
+          return repo.firmarLote(
+            [_id, ...otros],
+            firma,
+            firmanteId: firmanteId,
+            signerName: signer,
+            obsCliente: _obs.text.trim(),
+            lat: lat,
+            lng: lng,
+          );
+        }
         await repo.saveSignature(
           _id,
-          bytes == null ? null : base64Encode(bytes),
+          firma,
           firmanteId: firmanteId,
-          signerName: firmanteId == null && nombre.isNotEmpty ? nombre : null,
+          signerName: signer,
           obsCliente: _obs.text.trim(),
           lat: lat,
           lng: lng,
         );
-        await repo.finalize(_id, lat: lat, lng: lng); // mueve la madre a Finalizada
-        return true;
+        if (!yaFinalizada) await repo.finalize(_id, lat: lat, lng: lng);
+        return '';
       });
 
-      if (hecho == true) {
+      if (lote != null) {
         ref.invalidate(taskDetailProvider(_id));
+        for (final o in otros) {
+          ref.invalidate(taskDetailProvider(o));
+        }
         ref.invalidate(tasksListProvider);
-        if (mounted) Navigator.pop(context);
+        if (!mounted) return;
+        if (lote.isNotEmpty) _snack('Firmados $n albaranes · $lote');
+        Navigator.pop(context);
       }
+    } catch (e) {
+      if (mounted) await mostrarErrorAccion(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Finaliza sin firma (genera el enlace) y ofrece enviarlo por WhatsApp.
+  Future<void> _firmarMasTarde() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Firmar más tarde'),
+        content: const Text('El servicio se finalizará sin firma y quedará pendiente de firma.\n\n'
+            'Una tarea finalizada ya no es modificable.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Revisar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Finalizar')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final (lat, lng) = await bestEffortLocation();
+      if (!mounted) return;
+      final res = await ejecutarAccionTarea(
+        context,
+        ref,
+        _id,
+        () => ref.read(tasksRepoProvider).finalize(_id, firmaDiferida: true, lat: lat, lng: lng),
+      );
+      if (res == null || !mounted) return;
+      ref.invalidate(taskDetailProvider(_id));
+      ref.invalidate(tasksListProvider);
+
+      final enviar = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Pendiente de firma'),
+          content: const Text('¿Enviar el enlace de firma por WhatsApp?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('No')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sí')),
+          ],
+        ),
+      );
+      if (enviar == true && mounted) await enviarEnlaceFirma(context, ref, _id);
+      if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) await mostrarErrorAccion(context, e);
     } finally {
@@ -199,6 +299,10 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
     // Madre fresca: refleja las ediciones de recursos hechas aquí.
     final t = ref.watch(taskDetailProvider(_id)).valueOrNull ?? widget.task;
     if (t.hasSignature) return _vistaFirmada(t);
+    final permisos = ref.watch(sessionControllerProvider).profile?.config.permisos;
+    // Solo antes de finalizar: una tarea ya pendiente de firma se firma o se le
+    // envía el enlace desde el detalle.
+    final puedeDiferir = (permisos?.firmaDiferida ?? false) && t.firma?.faltaFirma != true;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Firmar servicio')),
@@ -208,9 +312,10 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           const Text('Resumen del servicio',
               style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
           const SizedBox(height: 8),
-          for (final r in t.recursos) _filaResumen(r),
+          for (final r in t.recursos) _filaResumen(r, editable: t.firma?.faltaFirma != true),
           const SizedBox(height: 8),
           ConceptosSection(task: t, soloLectura: true),
+          _otrosPendientes(),
           const Divider(height: 24),
           TextField(
             controller: _obs,
@@ -247,8 +352,16 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
                 ? const SizedBox(
                     width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.check),
-            label: const Text('Confirmar y firmar'),
+            label: Text(_lote.isEmpty ? 'Confirmar y firmar' : 'Firmar seleccionados (${_lote.length + 1})'),
           ),
+          if (puedeDiferir) ...[
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _busy ? null : _firmarMasTarde,
+              icon: const Icon(Icons.schedule_send),
+              label: const Text('Firmar más tarde'),
+            ),
+          ],
           SizedBox(height: MediaQuery.of(context).padding.bottom + 24),
         ],
       ),
@@ -353,22 +466,95 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
     ]);
   }
 
+  /// Bloque "Otros albaranes pendientes de esta obra": casilla por albarán,
+  /// desplegable con su resumen. El actual va siempre incluido.
+  Widget _otrosPendientes() {
+    final async = ref.watch(_pendientesProvider(_id));
+    final otros = (async.valueOrNull ?? const <PendienteFirma>[])
+        .where((p) => p.id != _id)
+        .toList();
+    if (otros.isEmpty) return const SizedBox.shrink();
+    final todos = otros.every((p) => _lote.contains(p.id));
+
+    return Card(
+      margin: const EdgeInsets.only(top: 12),
+      child: ExpansionTile(
+        initiallyExpanded: true,
+        title: Text('Otros albaranes pendientes de esta obra (${otros.length})',
+            style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: const Text('Márcalos para firmarlos a la vez'),
+        children: [
+          CheckboxListTile(
+            dense: true,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('Seleccionar todos'),
+            value: todos,
+            onChanged: _busy
+                ? null
+                : (v) => setState(() {
+                      if (v == true) {
+                        _lote.addAll(otros.map((p) => p.id));
+                      } else {
+                        _lote.clear();
+                      }
+                    }),
+          ),
+          for (final p in otros) _filaPendiente(p),
+        ],
+      ),
+    );
+  }
+
+  Widget _filaPendiente(PendienteFirma p) {
+    final marcado = _lote.contains(p.id);
+    final titulo = [
+      if (p.fecha != null) fmtDia(p.fecha!),
+      p.albaran ?? 'Albarán ${p.id}',
+    ].join(' · ');
+    return ExpansionTile(
+      leading: Checkbox(
+        value: marcado,
+        onChanged: _busy
+            ? null
+            : (v) => setState(() {
+                  if (v == true) {
+                    _lote.add(p.id);
+                  } else {
+                    _lote.remove(p.id);
+                  }
+                }),
+      ),
+      title: Text(titulo),
+      subtitle: p.servicio == null ? null : Text(p.servicio!),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      expandedCrossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (p.resumenAlbaran != null) ResumenAlbaranView(resumen: p.resumenAlbaran!),
+        if (p.recargo != null) _kv('Recargo', p.recargo!),
+        if (p.salida != null) _kv('Salida', p.salida!),
+        if (p.cargos.isNotEmpty)
+          _kv('Complementos', p.cargos.where((c) => !c.anulado).map((c) => c.producto).join(', ')),
+      ],
+    );
+  }
+
   /// "****567X · 600 111 222"
   static String _datosFirmante(Firmante f) => [
         if ((f.documento ?? '').isNotEmpty) f.documento!,
         if ((f.movil ?? '').isNotEmpty) fmtMovil(f.movil!),
       ].join(' · ');
 
-  Widget _filaResumen(Recurso r) {
+  Widget _filaResumen(Recurso r, {bool editable = true}) {
     final res = r.resumenAlbaran;
+    final editar = editable && r.esMio;
     return InkWell(
-      onTap: r.esMio ? () => _editarRecurso(r) : null,
+      onTap: editar ? () => _editarRecurso(r) : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             Expanded(child: Text(r.recurso, style: const TextStyle(fontWeight: FontWeight.w600))),
-            if (r.esMio) const Icon(Icons.edit, size: 16, color: Colors.black38),
+            if (editar) const Icon(Icons.edit, size: 16, color: Colors.black38),
           ]),
           if (res != null)
             ResumenAlbaranView(resumen: res)

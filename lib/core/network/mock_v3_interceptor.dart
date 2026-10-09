@@ -23,6 +23,10 @@ class MockV3Interceptor extends Interceptor {
   static final _anularRe = RegExp(r'/tasks/(\d+)/cargos/(\d+)/anular$');
   static final _firmantesRe = RegExp(r'/tasks/(\d+)/firmantes$');
   static final _signatureRe = RegExp(r'/tasks/(\d+)/signature$');
+  static final _pendientesRe = RegExp(r'/tasks/(\d+)/pendientes-firma$');
+  static final _finalizeRe = RegExp(r'/tasks/(\d+)/finalize$');
+  static final _solicitudesRe = RegExp(r'/firma/solicitudes$');
+  static final _loteRe = RegExp(r'/firma/lote$');
 
   static const _candidatos = [
     {'line_id': 9001, 'producto': 'Camión grúa 100 t (mock)', 'cambia_minimo': false},
@@ -51,6 +55,43 @@ class MockV3Interceptor extends Interceptor {
     {'id': 5013, 'nombre': 'Marta Soler (mock)', 'documento': 'X1234567L', 'movil': null},
   ];
   int _nextFirmanteId = 6000;
+
+  /// Firma diferida simulada (el servidor v2 no la conoce).
+  final Set<int> _diferidas = {};
+  final Map<int, Map<String, dynamic>> _solicitudes = {};
+  final Set<int> _firmadasLote = {};
+  int _nextSolicitudId = 50;
+  int _nextLote = 1;
+
+  /// Dos albaranes ficticios de la misma obra para probar la firma en lote.
+  static const _pendientesFicticios = [990001, 990002];
+
+  static String _utcStr(DateTime d) {
+    String t(int n) => n.toString().padLeft(2, '0');
+    final u = d.toUtc();
+    return '${u.year}-${t(u.month)}-${t(u.day)} ${t(u.hour)}:${t(u.minute)}:${t(u.second)}';
+  }
+
+  Map<String, dynamic> _nuevaSolicitud(int taskId) {
+    final id = _nextSolicitudId++;
+    final s = <String, dynamic>{
+      'id': id,
+      'estado': 'pendiente',
+      'url': 'https://mock.invalid/firma/tok$id',
+      'expira': _utcStr(DateTime.now().add(const Duration(days: 7))),
+    };
+    _solicitudes[taskId] = s;
+    return s;
+  }
+
+  Map<String, dynamic>? _firmaDe(int? id, bool firmadaServidor) => {
+        'falta_firma': id != null && _diferidas.contains(id),
+        'firmada': firmadaServidor || (id != null && _firmadasLote.contains(id)),
+        'lote': id != null && _firmadasLote.contains(id)
+            ? {'codigo': 'LOTE/2026/MOCK', 'n_albaranes': _firmadasLote.length}
+            : null,
+        'solicitud': id != null ? _solicitudes[id] : null,
+      };
 
   static Map<String, dynamic> _firmanteApp(Map<String, dynamic> f) {
     final d = (f['documento'] ?? '') as String;
@@ -145,6 +186,73 @@ class MockV3Interceptor extends Interceptor {
       return handler.next(_aDetalle(options, m));
     }
 
+    // GET pendientes de firma de la obra: los ficticios + los diferidos reales.
+    m = _pendientesRe.firstMatch(path);
+    if (!post && m != null) {
+      final ids = [..._pendientesFicticios, ..._diferidas]
+          .where((i) => !_firmadasLote.contains(i))
+          .toList();
+      return handler.resolve(_ok(options, [
+        for (final i in ids)
+          {
+            'id': i,
+            'albaran': _pendientesFicticios.contains(i) ? 'ALB/2026/$i (mock)' : 'Tarea $i',
+            'fecha': _utcStr(DateTime.now().subtract(Duration(days: i % 3 + 1))),
+            'servicio': {'producto': 'Camión grúa 80 t (mock)'},
+            'cargos': [
+              {'id': 1, 'producto': 'Balancín', 'cantidad': 1.0, 'anulado': false,
+               'origen': 'planificado', 'anulable': false},
+            ],
+            'recargo': {'value': 'none', 'label': 'Sin recargo'},
+            'salida': {'value': 'salida', 'label': 'Salida'},
+            'resumen_albaran': {
+              'modo': 'horario',
+              'inicio': _utcStr(DateTime.now().subtract(const Duration(days: 1, hours: 8))),
+              'fin': _utcStr(DateTime.now().subtract(const Duration(days: 1))),
+              'comida': null, 'horas': 8.0, 'servicio_minimo': false,
+              'obs_conductor': null, 'obs_cliente': null,
+            },
+          },
+      ]));
+    }
+
+    // POST finalize con firma diferida → se simula (el v2 exige firma).
+    m = _finalizeRe.firstMatch(path);
+    if (post && m != null && d is Map && d['firma_diferida'] == true) {
+      final id = int.parse(m[1]!);
+      _diferidas.add(id);
+      _nuevaSolicitud(id);
+      return handler.next(_aDetalle(options, m));
+    }
+
+    // POST solicitudes de firma.
+    if (post && _solicitudesRe.hasMatch(path) && d is Map) {
+      final ids = (d['task_ids'] as List? ?? const []).whereType<int>().toList();
+      Map<String, dynamic>? sol;
+      for (final i in ids) {
+        sol = _nuevaSolicitud(i);
+      }
+      if (sol == null) {
+        return handler.reject(_error(options, 'datos_invalidos', 'Sin tareas.'));
+      }
+      return handler.resolve(_ok(options, {
+        ...sol,
+        'mensaje': 'Hola, Grúas (mock) le envía ${ids.length} albarán(es) para firmar: ${sol['url']}',
+      }));
+    }
+
+    // POST firma en lote → se simula; el servidor v2 no se toca.
+    if (post && _loteRe.hasMatch(path) && d is Map) {
+      final ids = (d['task_ids'] as List? ?? const []).whereType<int>().toList();
+      _firmadasLote.addAll(ids);
+      _diferidas.removeAll(ids);
+      ids.forEach(_solicitudes.remove);
+      return handler.resolve(_ok(options, {
+        'lote': 'LOTE/2026/${(_nextLote++).toString().padLeft(4, '0')} (mock)',
+        'tasks': const [],
+      }));
+    }
+
     // GET firmantes de la obra.
     m = _firmantesRe.firstMatch(path);
     if (!post && m != null) {
@@ -229,6 +337,12 @@ class MockV3Interceptor extends Interceptor {
     if (data is Map<String, dynamic>) {
       if (response.requestOptions.path.endsWith('/me')) {
         _config(data);
+      } else if (data['tasks'] is List) {
+        // Lista: bloque `firma` en cada resumen (propuesta de contrato).
+        for (final t in (data['tasks'] as List).whereType<Map<String, dynamic>>()) {
+          _marcarLote(t);
+          t.putIfAbsent('firma', () => _firmaDe(t['id'] as int?, t['has_signature'] == true));
+        }
       } else if (data.containsKey('worksheet')) {
         _detalle(data); // cualquier respuesta con forma de _task_detail
       }
@@ -303,12 +417,8 @@ class MockV3Interceptor extends Interceptor {
       t['cargos'] = [for (final c in _cargosDe(id)) Map<String, dynamic>.from(c)];
     }
 
-    t.putIfAbsent('firma', () => <String, dynamic>{
-          'falta_firma': false,
-          'firmada': t['has_signature'] == true,
-          'lote': null,
-          'solicitud': null,
-        });
+    _marcarLote(t);
+    t.putIfAbsent('firma', () => _firmaDe(id, t['has_signature'] == true));
 
     final ap = t['apertura'];
     final ci = t['cierre'];
@@ -348,6 +458,15 @@ class MockV3Interceptor extends Interceptor {
     }
 
     _aplicarSel(t, simular);
+  }
+
+  /// Las firmadas en lote simulado se muestran como firmadas y cerradas (solo QA:
+  /// en el servidor v2 siguen sin firma).
+  void _marcarLote(Map<String, dynamic> t) {
+    if (_firmadasLote.contains(t['id'])) {
+      t['has_signature'] = true;
+      t['cerrada'] = true;
+    }
   }
 
   void _aplicarSel(Map<String, dynamic> t, Map<String, bool> simular) {
