@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
+import '../../../core/providers.dart';
 import '../session_controller.dart';
 
 /// Genera el keypair en hardware y registra el dispositivo (queda pendiente).
@@ -22,9 +22,27 @@ class _EnrollmentScreenState extends ConsumerState<EnrollmentScreen> {
     if (mounted) setState(() => _busy = false);
   }
 
+  /// Vuelve a la pantalla del QR: borra conexión, registro y clave del teléfono.
+  Future<void> _cambiarConexion() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Cambiar conexión'),
+        content: const Text('Se borrará la configuración de este teléfono y tendrás '
+            'que escanear de nuevo el código QR de alta.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Cambiar')),
+        ],
+      ),
+    );
+    if (ok == true) await ref.read(sessionControllerProvider.notifier).resetPairing();
+  }
+
   @override
   Widget build(BuildContext context) {
     final msg = ref.watch(sessionControllerProvider).message;
+    final perfil = ref.watch(connectionProfileProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Registrar dispositivo')),
       body: Padding(
@@ -60,9 +78,22 @@ class _EnrollmentScreenState extends ConsumerState<EnrollmentScreen> {
               const SizedBox(height: 16),
               Text(msg, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
             ],
+            const SizedBox(height: 32),
+            if (perfil != null)
+              Text(
+                'Servidor: ${perfil.label ?? perfil.baseUrl}\nBase de datos: ${perfil.db}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.black54, fontSize: 12),
+              ),
+            TextButton.icon(
+              onPressed: _busy ? null : _cambiarConexion,
+              icon: const Icon(Icons.qr_code_scanner),
+              label: const Text('Cambiar conexión (escanear QR)'),
+            ),
           ],
         ),
       ),
     );
   }
+
 }

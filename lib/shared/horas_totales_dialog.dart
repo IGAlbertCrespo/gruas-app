@@ -67,6 +67,36 @@ class _HorasTotalesDialogState extends State<_HorasTotalesDialog> {
         _comida = (_comida + delta).clamp(0.0, _comidaMax).toDouble();
       });
 
+  /// Toque en la cifra: teclear las horas (redondeo a 30 min, dentro de límites).
+  Future<void> _teclear() async {
+    final ctrl = TextEditingController(text: fmtNum(_horas));
+    final v = await showDialog<double>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Horas'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(hintText: 'p. ej. 8 o 8,5'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          FilledButton(
+            onPressed: () => Navigator.pop(
+                ctx, double.tryParse(ctrl.text.trim().replaceAll(',', '.'))),
+            child: const Text('Aceptar'),
+          ),
+        ],
+      ),
+    );
+    if (v == null || !mounted) return;
+    setState(() => _horas = round30(v).clamp(horasTotalesMin, _max).toDouble());
+  }
+
+  static String fmtNum(double h) =>
+      h % 1 == 0 ? h.toInt().toString() : h.toString().replaceAll('.', ',');
+
   @override
   Widget build(BuildContext context) {
     final ap = widget.apertura;
@@ -91,15 +121,18 @@ class _HorasTotalesDialogState extends State<_HorasTotalesDialog> {
                 onPressed: _horas > horasTotalesMin ? () => _sumar(-_paso) : null,
                 icon: const Icon(Icons.remove),
               ),
-              SizedBox(
-                width: 140,
-                child: Text(
-                  fmtHoras(_horas),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+              InkWell(
+                onTap: _teclear,
+                borderRadius: BorderRadius.circular(8),
+                child: SizedBox(
+                  width: 140,
+                  child: Text(
+                    fmtHoras(_horas),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
+                  ),
                 ),
-              ),
-              IconButton.filledTonal(
+              ),              IconButton.filledTonal(
                 iconSize: 32,
                 onPressed: _horas < _max ? () => _sumar(_paso) : null,
                 icon: const Icon(Icons.add),

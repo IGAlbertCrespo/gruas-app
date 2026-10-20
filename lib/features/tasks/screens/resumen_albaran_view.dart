@@ -21,6 +21,7 @@ class ResumenAlbaranView extends StatelessWidget {
     final l = d.toLocal();
     return '${_two(l.day)}/${_two(l.month)} ${_hm(l)}';
   }
+  static String _dmy(DateTime d) => '${_two(d.day)}/${_two(d.month)}/${d.year}';
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +44,7 @@ class ResumenAlbaranView extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (r.esIncidencia) _chip('Incidencia', Colors.red),
+        if (r.inicio == null && r.fecha != null) _fila('Fecha', _dmy(r.fecha!)),
         if (r.inicio != null) _fila('Inicio', _fh(r.inicio!)),
         if (verFin) _fila('Fin', _fh(r.fin!)),
         if (comida != null) _fila('Comida', comida),

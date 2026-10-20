@@ -26,13 +26,22 @@ class AppVersion {
     /// Debe llamarse tras `WidgetsFlutterBinding.ensureInitialized()` y antes de `runApp`.
   /// Falla en voz alta si el build no es un entero > 0: sin cabecera válida el
   /// servidor nos trataría como v1 sin que nadie lo notara.
+    /// Debe llamarse tras `WidgetsFlutterBinding.ensureInitialized()` y antes de `runApp`.
+  /// Falla en voz alta si el build no es un entero > 0: sin cabecera válida el
+  /// servidor nos trataría como v1 sin que nadie lo notara.
+  ///
+  /// Con `flutter build apk --split-per-abi`, Android recibe versionCode =
+  /// ABI × 1000 + build (1010, 2010, 4010…). Se normaliza al build real del
+  /// pubspec para que `X-App-Build` sea el mismo en todas las arquitecturas.
   static Future<void> load() async {
     final info = await PackageInfo.fromPlatform();
-    if ((int.tryParse(info.buildNumber) ?? 0) <= 0) {
+    final raw = int.tryParse(info.buildNumber) ?? 0;
+    final build = raw >= 1000 ? raw % 1000 : raw;
+    if (build <= 0) {
       throw StateError(
           'Build inválido ("${info.buildNumber}"): revisa version: X.Y.Z+N en pubspec.yaml');
     }
-    current = AppVersion(version: info.version, buildNumber: info.buildNumber);
+    current = AppVersion(version: info.version, buildNumber: '$build');
   }
 
   /// Cabeceras de convivencia v1/v2. Sin ellas el servidor trata al cliente como v1.

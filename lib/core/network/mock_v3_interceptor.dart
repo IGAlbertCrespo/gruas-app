@@ -3,6 +3,8 @@ import 'package:dio/dio.dart';
 /// Solo QA. Se activa con `--dart-define=MOCK_V3=true` y nunca en producción
 /// (ver `dioProvider` en core/providers.dart).
 const bool kMockV3 = bool.fromEnvironment('MOCK_V3');
+/// QA: simula una compañía con "solo horas" + control de jornada.
+const bool kMockSoloHoras = bool.fromEnvironment('MOCK_SOLO_HORAS');
 
 /// Completa las respuestas de un servidor que aún no es v3 con los bloques del
 /// CONTRATO v3.3, para desarrollar pantallas antes de que el backend esté listo.
@@ -98,7 +100,7 @@ class MockV3Interceptor extends Interceptor {
     return {
       'id': f['id'],
       'nombre': f['nombre'],
-      'documento': d.length > 4 ? '****${d.substring(d.length - 4)}' : d,
+      'documento': d.length > 3 ? '****${d.substring(d.length - 3)}' : d,
       'movil': f['movil'],
     };
   }
@@ -355,6 +357,7 @@ class MockV3Interceptor extends Interceptor {
     if (c is! Map<String, dynamic>) return;
     c.putIfAbsent('comida', () => 'siempre');
     c.putIfAbsent('comida_hora_defecto', () => '14:00');
+    c.putIfAbsent('comida_en_horas', () => true); // v3.9
     c.putIfAbsent('minimo_mostrar_fin', () => false);
     c.putIfAbsent('firma_enlace_dias', () => 7);
     // En QA todo activo para ver todas las acciones.
@@ -366,6 +369,13 @@ class MockV3Interceptor extends Interceptor {
           'editar_salida': true,
           'firma_diferida': true,
         });
+    if (kMockSoloHoras) {
+      c['solo_horas'] = true;
+      c['control_jornada'] = true;
+      c['modo_inicio'] = 'planificada';
+      c['modo_cierre'] = 'duracion';
+      c['tramos'] = false;
+    }
   }
 
   void _detalle(Map<String, dynamic> t) {

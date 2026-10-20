@@ -171,7 +171,7 @@ class _DestinatarioScreenState extends ConsumerState<_DestinatarioScreen> {
   Future<void> _continuarOtra() async {
     final movil = _movil.text.trim();
     final doc = _documento.text.toUpperCase().replaceAll(RegExp(r'[\s\-]'), '');
-    if (doc.isEmpty) {
+    if (doc.isEmpty || _nombre.text.trim().isEmpty) {
       Navigator.pop(context, _Destinatario(null, movil));
       return;
     }
@@ -272,7 +272,7 @@ class _DestinatarioScreenState extends ConsumerState<_DestinatarioScreen> {
           textCapitalization: TextCapitalization.characters,
           decoration: const InputDecoration(
             labelText: 'Documento (opcional)',
-            helperText: 'Con documento queda guardado como firmante de la obra',
+            helperText: 'Con nombre y documento queda guardado como firmante de la obra',
           ),
         ),
         const SizedBox(height: 16),

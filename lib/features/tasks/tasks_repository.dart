@@ -55,7 +55,7 @@ class TasksRepository {
     /// Cierra UN recurso (CONTRATO v3.1 §4.1). No mueve etapa. El servidor
   /// calcula el facturable y decide el mínimo. `apertura_informada` no se envía
   /// (el servidor usa la guardada).
-  Future<TaskDetail> close(int id, {
+  Future<({TaskDetail task, JornadaStart? jornada})> close(int id, {
     required String modoCierre,      // 'hora' | 'duracion'
     DateTime? aperturaInformada,     // solo si el conductor corrigió el inicio
     DateTime? cierreInformada,
@@ -87,7 +87,12 @@ class TasksRepository {
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
     });
-    return TaskDetail.fromJson(res);
+      return (
+      task: TaskDetail.fromJson(res),
+      jornada: res['jornada'] is Map
+          ? JornadaStart.fromJson(res['jornada'] as Map<String, dynamic>)
+          : null,
+    );
   }
   /// v3.1 §5.1 — sobre la MADRE. El servidor recalcula el % y lo propaga a los cargos.
   Future<TaskDetail> setRecargo(int id, String tipo) async {
@@ -154,9 +159,33 @@ class TasksRepository {
           : null,
     );
   }
+  /// v3.8 §6.3 — no facturable con "solo horas": día de ejecución + horas.
+  /// El servidor usa la hora planificada en ese día.
+  Future<({TaskDetail task, JornadaStart? jornada})> completeHoras(
+    int id, {
+    required DateTime fecha,
+    required double horasTotales,
+    bool confirmar = false,
+    double? lat,
+    double? lng,
+  }) async {
+    final dia = '${fecha.year.toString().padLeft(4, '0')}-${_two(fecha.month)}-${_two(fecha.day)}';
+    final res = await api.postJson('/tasks/$id/complete', data: {
+      'fecha': dia,
+      'horas_totales': horasTotales,
+      if (confirmar) 'confirmar': true,
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
+    });
+    return (
+      task: TaskDetail.fromJson(res),
+      jornada: res['jornada'] is Map
+          ? JornadaStart.fromJson(res['jornada'] as Map<String, dynamic>)
+          : null,
+    );
+  }
 
-
-    /// Finaliza la madre. Con `firmaDiferida` (§6.3) finaliza sin firma y el
+  /// Finaliza la madre. Con `firmaDiferida` (§6.3) finaliza sin firma y el
   /// servidor genera la solicitud de firma.
   Future<TaskDetail> finalize(int id, {bool firmaDiferida = false, double? lat, double? lng}) async {
     final res = await api.postJson('/tasks/$id/finalize', data: {
@@ -258,21 +287,25 @@ class TasksRepository {
   }
 }
 
-/// Respaldo de jornada que el servidor puede abrir al iniciar/reanudar una tarea.
+/// Jornada que el servidor abre o registra (respaldo de /start; con "solo
+/// horas", la jornada completa calculada de las tareas en /close y /complete).
 class JornadaStart {
   final bool abiertaAutomaticamente;
   final String? checkIn;
+  final String? checkOut; // v3.8: solo cuando el servidor registra la jornada completa
   final String? error;
 
   const JornadaStart({
     required this.abiertaAutomaticamente,
     this.checkIn,
+    this.checkOut,
     this.error,
   });
 
   factory JornadaStart.fromJson(Map<String, dynamic> j) => JornadaStart(
         abiertaAutomaticamente: j['abierta_automaticamente'] == true,
         checkIn: j['check_in']?.toString(),
+        checkOut: j['check_out']?.toString(),
         error: j['error']?.toString(),
       );
 }

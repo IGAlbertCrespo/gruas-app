@@ -23,6 +23,7 @@ class _MaintenanceReportScreenState extends ConsumerState<MaintenanceReportScree
   final _formKey = GlobalKey<FormState>();
   final _descCtrl = TextEditingController();
   final _kmCtrl = TextEditingController();
+  final _horasCtrl = TextEditingController();
 
   VehiculoTaller? _vehiculo;
   TipoAveria? _tipo;
@@ -126,7 +127,7 @@ class _MaintenanceReportScreenState extends ConsumerState<MaintenanceReportScree
       final km = _kmCtrl.text.trim().isEmpty ? null : int.tryParse(_kmCtrl.text.trim());
       final horasTxt = _horasCtrl.text.trim().replaceAll(',', '.');
       final horasGrua = horasTxt.isEmpty ? null : double.tryParse(horasTxt);
-      final _horasCtrl = TextEditingController();
+
       final res = await ref.read(maintenanceRepoProvider).create(
             vehicleId: _vehiculo!.id,
             tipoAveriaId: _tipo!.id,

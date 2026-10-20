@@ -165,11 +165,15 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         label: const Text('Firmar'),
       ));
     } else if (t.stage.alias != 'Finalizada') {
+      // Solo horas: se puede finalizar a partir del día programado.
+      final soloHoras = ref.read(sessionControllerProvider).profile?.config.soloHoras ?? false;
+      final dia = t.fechaServicio == null ? null : soloDia(t.fechaServicio!);
+      final pronto = soloHoras && dia != null && dia.isAfter(soloDia(DateTime.now()));
       parts.add(FilledButton.icon(
         style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
-        onPressed: _busy ? null : () => _finalizarTarea(t),
+        onPressed: _busy || pronto ? null : () => _finalizarTarea(t),
         icon: const Icon(Icons.check_circle),
-        label: const Text('Finalizar tarea'),
+        label: Text(pronto ? 'Finalizar desde el ${fmtDia(dia)}' : 'Finalizar tarea'),
       ));
     }
     if (parts.isEmpty) return null;
@@ -182,16 +186,19 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   Future<void> _finalizarTarea(TaskDetail t) async {
-    // Guarda: no se puede finalizar una tarea que no se ha iniciado. Se mira
-    // 'iniciada' (no 'pendientes'), para no bloquear el caso legítimo de
-    // recursos ya iniciados y cerrados que van a firma.
-    if (!t.recursos.any((r) => r.esMio && r.iniciada)) {
+    // Guarda: sin "solo horas" no se finaliza una tarea que no se ha iniciado
+    // (se mira 'iniciada', no 'pendientes', para no bloquear recursos ya cerrados).
+    final soloHoras = ref.read(sessionControllerProvider).profile?.config.soloHoras ?? false;
+    if (!soloHoras && !t.recursos.any((r) => r.esMio && r.iniciada)) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Inicia la tarea antes de finalizarla.')));
       return;
     }
     try {
-      final pendientes = t.recursos.where((r) => r.esMio && r.iniciada && !r.cerrada).toList();
+      // Solo horas: se piden las horas de cada recurso propio sin cerrar.
+      final pendientes = t.recursos
+          .where((r) => r.esMio && !r.cerrada && (soloHoras || r.iniciada))
+          .toList();
       for (final r in pendientes) {
         final ok = await cerrarRecursoDialog(context, ref, r, madreId: t.id);
         if (!ok || !mounted) return;
@@ -502,6 +509,7 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
     final c = ref.read(sessionControllerProvider).profile?.config;
     return c != null && c.mostrarInicioCierre && !c.capturaManualHoras;
   }
+  bool get _soloHoras => ref.read(sessionControllerProvider).profile?.config.soloHoras ?? false;
 
   Future<void> _pausarActivo(int exceptoId) async {
     for (final r in widget.recursos) {
@@ -524,7 +532,7 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
     }
   }
 
-    Future<void> _avisoJornada(JornadaStart? j) => tratarJornada(context, ref, j);
+  Future<void> _avisoJornada(JornadaStart? j) => tratarJornada(context, ref, j);
 
   Future<void> _iniciar(Recurso r) async {
     final planificada =
@@ -634,6 +642,8 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
 
   List<Widget> _botones(Recurso r) {
     if (_busy) return [const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))];
+    // Solo horas: no se inicia ni se cierra por recurso; todo va por "Finalizar".
+    if (_soloHoras) return const [];
     if (!r.iniciada) {
       return [
         FilledButton.icon(

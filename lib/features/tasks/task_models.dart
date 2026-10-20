@@ -85,7 +85,14 @@ class TaskSummary {
         completada: j['completada'] == true ||
             ((j['tipo']?.toString() == 'no_facturable') && j['cerrada'] == true),
         tipoInterna: _recargo(j['tipo_interna']),   // mismo formato {value, label}
-        faltaFirma: (j['firma'] is Map) && (j['firma'] as Map)['falta_firma'] == true,
+                // Bloque `firma` si el servidor lo envía; si no (lista v3.7), se deduce:
+        // facturable Finalizada y sin firma = pendiente de firma.
+        faltaFirma: j['firma'] is Map
+            ? (j['firma'] as Map)['falta_firma'] == true
+            : ((j['tipo'] ?? 'servicio') != 'no_facturable' &&
+                (j['stage'] is Map) &&
+                (j['stage'] as Map)['alias'] == 'Finalizada' &&
+                j['has_signature'] != true),
         solicitudFirma: j['firma'] is Map
             ? SolicitudFirma.fromJson((j['firma'] as Map)['solicitud'])
             : null,

@@ -8,6 +8,7 @@ import '../attendance_models.dart';
 import '../attendance_repository.dart';
 import '../../../shared/pausa_dialog.dart';
 import '../../../shared/widgets/brand_logo.dart';
+import '../../auth/session_controller.dart';
 import '../../tasks/screens/task_detail_screen.dart';
 
 
@@ -325,7 +326,17 @@ class _AttendanceScreenState extends ConsumerState<AttendanceScreen> with Widget
                 _SummaryCard(summary: _lastSummary!),
               ],
               const SizedBox(height: 8),
-              stateAsync.maybeWhen(data: (st) => _actions(st), orElse: () => const SizedBox.shrink()),
+              // Solo horas + control de jornada: la jornada sale de las tareas (v3.8 §6.4).
+              if (ref.watch(sessionControllerProvider).profile?.config.jornadaDesdeTareas ?? false)
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('Tu jornada se registra automáticamente a partir de las '
+                        'tareas que cierras. No hace falta fichar.'),
+                  ),
+                )
+              else
+                stateAsync.maybeWhen(data: (st) => _actions(st), orElse: () => const SizedBox.shrink()),
               // Logo nítido bajo el detalle.
               const SizedBox(height: 32),
               const Center(child: BrandLogo(size: 72)),

@@ -12,6 +12,8 @@ import '../../auth/session_controller.dart';
 import '../../auth/session_models.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
+import '../tasks_repository.dart' show JornadaStart;
+import 'jornada_aviso.dart';
 import 'task_detail_screen.dart' show pickFriendlyTime;
 
 /// Cierre de UN recurso (CONTRATO v3.1 §4). Devuelve true si el servidor lo cerró.
@@ -35,7 +37,9 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
   final regla = reglaComidaDe(cfg.comida);
 
   final bool porDuracion;
-  if (cfg.cierreElegir) {
+  if (cfg.soloHoras) {
+    porDuracion = true; // v3.8: solo horas → siempre horas totales
+  } else if (cfg.cierreElegir) {
     final m = await _pickModoCierre(context);
     if (m == null || !context.mounted) return false;
     porDuracion = m;
@@ -49,7 +53,8 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
   // vuelven a pedir las horas.
   while (true) {
     if (!context.mounted) return false;
-    final apertura = aperturaCorregida ?? r.aperturaInformada;
+    // Solo horas: no hay inicio real; el servidor usa la hora planificada.
+    final apertura = cfg.soloHoras ? null : (aperturaCorregida ?? r.aperturaInformada);
 
     DateTime? cierre;
     double? horasTotales;
@@ -58,11 +63,13 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
     var confirmado = false; // "Es correcto" ante ventana > 16 h
 
     if (porDuracion) {
-      final res = await pickHorasTotales(
+            final res = await pickHorasTotales(
         context,
         inicial: horasTotalesIniciales(apertura: apertura), // sin mínimo: nunca se insinúa la cifra
         apertura: apertura,
-        regla: regla,
+        // v3.9: sin comida en horas totales si la compañía no la pide.
+        regla: cfg.preguntaComidaEnHoras ? regla : ReglaComida.nunca,
+        titulo: cfg.soloHoras ? '¿Cuántas horas?' : 'Horas totales del servicio',
         maximo: apertura != null ? horasMaxHasta(apertura) : null,
       );
       if (res == null || !context.mounted) return false;
@@ -123,7 +130,7 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
 
     final (lat, lng) = await bestEffortLocation();
     if (!context.mounted) return false;
-    final TaskDetail? res;
+    final ({TaskDetail task, JornadaStart? jornada})? res;
     try {
       res = await conConfirmacionDuracion(
         context,
@@ -155,10 +162,14 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
     }
     if (res == null) continue; // eligió revisar: el servidor no ha guardado nada
 
-    // Comida declarada al libro de jornada (clave = recurso: re-cerrar
-    // sobrescribe). Se concilia al fichar salida.
-    await ref.read(journeyLedgerProvider).setDeclared(r.id, comida);
+    // Comida al libro de jornada (se concilia al fichar salida), salvo que la
+    // jornada la construya el servidor a partir de las tareas (v3.8 §6.4).
+    if (!cfg.jornadaDesdeTareas) {
+      await ref.read(journeyLedgerProvider).setDeclared(r.id, comida);
+    }
+    if (context.mounted) await tratarJornada(context, ref, res.jornada);
     return true;
+
   }
 }
 

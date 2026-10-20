@@ -95,6 +95,12 @@ class SessionConfig {
   final bool minimoMostrarFin;
   final int firmaEnlaceDias;
   final Permisos permisos;
+  /// v3.8: operativa "solo horas" (no se inician tareas; se informan horas).
+  final bool soloHoras;
+  /// v3.8: la compañía registra la jornada (dato informativo).
+  final bool controlJornada;
+  /// v3.9: con cierre por horas totales, preguntar la comida. Ausente → true.
+  final bool comidaEnHoras;
 
 
   const SessionConfig({
@@ -109,12 +115,19 @@ class SessionConfig {
     this.minimoMostrarFin = false,
     this.firmaEnlaceDias = 7,
     this.permisos = const Permisos(),
+    this.soloHoras = false,
+    this.controlJornada = false,
+    this.comidaEnHoras = true,
   });
 
   bool get inicioPlanificado => modoInicio == 'planificada';
   bool get cierrePorDuracion => modoCierre == 'duracion';
   bool get cierreElegir => modoCierre == 'elegir';
   bool get comidaNunca => comida == 'nunca';
+  /// ¿Se pregunta la comida en un cierre por horas totales? (v3.9)
+  bool get preguntaComidaEnHoras => !comidaNunca && comidaEnHoras;
+  /// La jornada la construye el servidor a partir de las tareas: sin fichaje manual.
+  bool get jornadaDesdeTareas => soloHoras && controlJornada;
 
   factory SessionConfig.fromJson(Map<String, dynamic> j) => SessionConfig(
         capturaManualHoras: j['captura_manual_horas'] == true,
@@ -130,6 +143,9 @@ class SessionConfig {
         permisos: j['permisos'] is Map<String, dynamic>
             ? Permisos.fromJson(j['permisos'] as Map<String, dynamic>)
             : const Permisos(),
+        soloHoras: j['solo_horas'] == true,
+        controlJornada: j['control_jornada'] == true,
+        comidaEnHoras: j['comida_en_horas'] != false, // v3.9: ausente → true
   );
 
   /// "HH:MM" (contrato) → minutos. Tolera un número decimal (14.5 = 14:30).

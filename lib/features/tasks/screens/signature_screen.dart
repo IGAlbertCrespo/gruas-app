@@ -67,6 +67,18 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
 
   /// Otros albaranes pendientes marcados para firmar en lote.
   final Set<int> _lote = {};
+    /// Contacto de carga del servicio: solo como sugerencia de nombre (quien pidió
+  /// el servicio no tiene por qué ser quien firma).
+  String? get _sugerencia {
+    final c = widget.task.carga.contacto?.trim();
+    return (c == null || c.isEmpty) ? null : c;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _nombre.addListener(() => setState(() {}));
+  }
 
   int get _id => widget.task.id;
 
@@ -119,7 +131,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
 
   Future<void> _firmarYFinalizar() async {
     final hayFirma = _controller.isNotEmpty;
-    final firmante = _firmante;
+    var firmante = _firmante;
     final nombre = _nombre.text.trim();
     final doc = _normalizarDoc(_documento.text);
     final movil = _movil.text.trim();
@@ -155,18 +167,53 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
         );
         if (seguir != true || !mounted) return;
       }
+
+      // Alta como firmante de la obra solo con nombre + documento + firma
+      // (con firmante_id la firma es obligatoria). Si el documento ya existía,
+      // el servidor devuelve el nombre guardado en Odoo: se muestra en la
+      // tarjeta del firmante (no editable) y en la confirmación.
+      if (hayFirma && nombre.isNotEmpty && doc.isNotEmpty) {
+        setState(() => _busy = true);
+        try {
+          final f = await ejecutarAccionTarea(
+            context,
+            ref,
+            _id,
+            () => ref.read(tasksRepoProvider).crearFirmante(
+                  _id,
+                  nombre: nombre,
+                  documento: doc,
+                  movil: movil.isEmpty ? null : movil,
+                ),
+          );
+          if (f == null || !mounted) return; // error ya mostrado (incl. sin conexión)
+          firmante = f;
+          setState(() {
+            _firmante = f;
+            _otraPersona = false;
+          });
+        } catch (e) {
+          if (mounted) await mostrarErrorAccion(context, e);
+          return;
+        } finally {
+          if (mounted) setState(() => _busy = false);
+        }
+      }
     }
 
+    final quien = firmante != null
+        ? [firmante.nombre, if ((firmante.documento ?? '').isNotEmpty) firmante.documento!]
+            .join(' · ')
+        : [if (nombre.isNotEmpty) nombre, if (doc.isNotEmpty) doc].join(' · ');
     final n = _lote.length + 1;
+    if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Confirmar firma'),
-        content: Text(n > 1
-            ? '¿Confirma los datos introducidos?\n\nSe firmarán $n albaranes con la misma firma. '
-                'Un servicio finalizado ya no es modificable.'
-            : '¿Confirma los datos introducidos?\n\n'
-                'Una tarea finalizada ya no es modificable.'),
+        content: Text('Firma: ${quien.isEmpty ? '(solo firma)' : quien}\n\n'
+            '${n > 1 ? 'Se firmarán $n albaranes con la misma firma. ' : ''}'
+            'Un servicio finalizado ya no es modificable.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Revisar')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Confirmar')),
@@ -177,6 +224,10 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
 
     final yaFinalizada = _tarea.firma?.faltaFirma == true;
     final otros = _lote.toList();
+    final firmanteId = firmante?.id;
+    // Sin firmante: nombre y/o documento sueltos (sin alta).
+    final signer = firmanteId == null && nombre.isNotEmpty ? nombre : null;
+    final dni = firmanteId == null && doc.isNotEmpty ? doc : null;
 
     setState(() => _busy = true);
     try {
@@ -184,22 +235,9 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
       final (lat, lng) = await bestEffortLocation();
       if (!mounted) return;
       final repo = ref.read(tasksRepoProvider);
+      final firma = bytes == null ? null : base64Encode(bytes);
 
       final lote = await ejecutarAccionTarea(context, ref, _id, () async {
-        // "Otra persona" con documento → alta (o vinculación) como firmante.
-        var firmanteId = firmante?.id;
-        if (firmante == null && doc.isNotEmpty) {
-          final nuevo = await repo.crearFirmante(
-            _id,
-            nombre: nombre,
-            documento: doc,
-            movil: movil.isEmpty ? null : movil,
-          );
-          firmanteId = nuevo.id;
-        }
-        final firma = bytes == null ? null : base64Encode(bytes);
-        final signer = firmanteId == null && nombre.isNotEmpty ? nombre : null;
-
         if (otros.isNotEmpty) {
           // Lote: el servidor firma todas y finaliza la actual si solo está cerrada.
           return repo.firmarLote(
@@ -207,6 +245,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
             firma,
             firmanteId: firmanteId,
             signerName: signer,
+            dni: dni,
             obsCliente: _obs.text.trim(),
             lat: lat,
             lng: lng,
@@ -217,6 +256,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           firma,
           firmanteId: firmanteId,
           signerName: signer,
+          dni: dni,
           obsCliente: _obs.text.trim(),
           lat: lat,
           lng: lng,
@@ -236,6 +276,12 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
         Navigator.pop(context);
       }
     } catch (e) {
+      // Lote no válido (algún albarán ya no está pendiente): se refresca la
+      // lista de pendientes y se desmarcan para que el conductor vuelva a elegir.
+      if (e is ApiException && e.code == 'lote_invalido') {
+        ref.invalidate(_pendientesProvider(_id));
+        if (mounted) setState(() => _lote.clear());
+      }
       if (mounted) await mostrarErrorAccion(context, e);
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -408,6 +454,15 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           textCapitalization: TextCapitalization.words,
           decoration: const InputDecoration(labelText: 'Nombre de quien firma'),
         ),
+        if (_sugerencia != null && _nombre.text.trim().isEmpty)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ActionChip(
+              avatar: const Icon(Icons.person_pin_outlined, size: 18),
+              label: Text('Contacto de carga: $_sugerencia'),
+              onPressed: () => _nombre.text = _sugerencia!,
+            ),
+          ),
         const SizedBox(height: 12),
         TextField(
           controller: _documento,
@@ -420,7 +475,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
           keyboardType: TextInputType.phone,
           decoration: const InputDecoration(
             labelText: 'Móvil (opcional)',
-            helperText: 'Se guarda en el contacto si se indica el documento',
+            helperText: 'Con nombre, documento y firma queda guardado como firmante',
           ),
         ),
       ]);

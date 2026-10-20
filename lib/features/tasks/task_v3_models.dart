@@ -244,6 +244,8 @@ class ResumenAlbaran {
   final bool servicioMinimo;
   final String? obsConductor;
   final String? obsCliente;
+  /// v3.8: fecha del servicio (sin hora). Se muestra cuando no hay inicio real.
+  final DateTime? fecha;
   const ResumenAlbaran({
     required this.modo,
     this.inicio,
@@ -253,6 +255,7 @@ class ResumenAlbaran {
     this.servicioMinimo = false,
     this.obsConductor,
     this.obsCliente,
+    this.fecha,
   });
 
   bool get esMinimo => modo == 'minimo';
@@ -271,6 +274,7 @@ class ResumenAlbaran {
       servicioMinimo: j['servicio_minimo'] == true,
       obsConductor: _txt(j['obs_conductor']),
       obsCliente: _txt(j['obs_cliente']),
+      fecha: DateTime.tryParse(_txt(j['fecha']) ?? ''),
     );
   }
 }
