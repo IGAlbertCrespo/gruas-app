@@ -39,9 +39,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     // Popup automático de notas del chófer al abrir, si las hay.
     ref.listen(taskDetailProvider(widget.taskId), (prev, next) {
       final t = next.asData?.value;
-      if (t != null && !_notesShown && (t.notasChofer?.trim().isNotEmpty ?? false)) {
+      if (t != null && !_notesShown && (t.notasChofer
+          ?.trim()
+          .isNotEmpty ?? false)) {
         _notesShown = true;
-        WidgetsBinding.instance.addPostFrameCallback((_) => _showNotes(t.notasChofer!));
+        WidgetsBinding.instance.addPostFrameCallback((_) =>
+            _showNotes(t.notasChofer!));
       }
     });
 
@@ -50,18 +53,20 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         title: const Text('Servicio'),
         actions: [
           async.maybeWhen(
-            data: (t) => IconButton(
-              tooltip: 'Notas del chófer',
-              icon: const Icon(Icons.sticky_note_2_outlined),
-              onPressed: () => _showNotes(t.notasChofer ?? ''),
-            ),
+            data: (t) =>
+                IconButton(
+                  tooltip: 'Notas del chófer',
+                  icon: const Icon(Icons.sticky_note_2_outlined),
+                  onPressed: () => _showNotes(t.notasChofer ?? ''),
+                ),
             orElse: () => const SizedBox.shrink(),
           ),
         ],
       ),
       body: async.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => e is ApiException && e.upgradeRequired
+        error: (e, _) =>
+        e is ApiException && e.upgradeRequired
             ? UpgradeRequiredView(error: e)
             : Center(child: Text('$e')),
         data: (t) => _Body(task: t),
@@ -69,9 +74,9 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       bottomNavigationBar: widget.readOnly
           ? null
           : async.maybeWhen(
-              data: (t) => _actionsBar(t),
-              orElse: () => null,
-            ),
+        data: (t) => _actionsBar(t),
+        orElse: () => null,
+      ),
     );
   }
 
@@ -79,28 +84,32 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   void _showNotes(String notas) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Row(children: [
-          Icon(Icons.sticky_note_2_outlined),
-          SizedBox(width: 8),
-          Text('Notas del chófer'),
-        ]),
-        content: SingleChildScrollView(
-          child: Text(notas.trim().isEmpty ? 'Sin notas.' : notas),
-        ),
-        actions: [
-          if (!widget.readOnly)
-            TextButton.icon(
-              onPressed: () {
-                Navigator.pop(context);
-                _addComment();
-              },
-              icon: const Icon(Icons.add_comment),
-              label: const Text('Añadir comentario'),
+      builder: (_) =>
+          AlertDialog(
+            title: const Row(children: [
+              Icon(Icons.sticky_note_2_outlined),
+              SizedBox(width: 8),
+              Text('Notas del chófer'),
+            ]),
+            content: SingleChildScrollView(
+              child: Text(notas
+                  .trim()
+                  .isEmpty ? 'Sin notas.' : notas),
             ),
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cerrar')),
-        ],
-      ),
+            actions: [
+              if (!widget.readOnly)
+                TextButton.icon(
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _addComment();
+                  },
+                  icon: const Icon(Icons.add_comment),
+                  label: const Text('Añadir comentario'),
+                ),
+              TextButton(onPressed: () => Navigator.pop(context),
+                  child: const Text('Cerrar')),
+            ],
+          ),
     );
   }
 
@@ -108,22 +117,24 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
     final ctrl = TextEditingController();
     final text = await showDialog<String>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Añadir comentario'),
-        content: TextField(
-          controller: ctrl,
-          maxLines: 4,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Tu comentario…'),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, ctrl.text.trim()),
-            child: const Text('Añadir'),
+      builder: (_) =>
+          AlertDialog(
+            title: const Text('Añadir comentario'),
+            content: TextField(
+              controller: ctrl,
+              maxLines: 4,
+              autofocus: true,
+              decoration: const InputDecoration(hintText: 'Tu comentario…'),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context),
+                  child: const Text('Cancelar')),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, ctrl.text.trim()),
+                child: const Text('Añadir'),
+              ),
+            ],
           ),
-        ],
-      ),
     );
     if (text == null || text.isEmpty) return;
     try {
@@ -136,12 +147,13 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
 
   // ---------- Acciones ----------
 
-    Widget? _actionsBar(TaskDetail t) {
+  Widget? _actionsBar(TaskDetail t) {
     final parts = <Widget>[];
     if (t.hasSignature) {
       parts.add(OutlinedButton.icon(
-        onPressed: () => Navigator.push(context,
-            MaterialPageRoute(builder: (_) => SignatureScreen(task: t))),
+        onPressed: () =>
+            Navigator.push(context,
+                MaterialPageRoute(builder: (_) => SignatureScreen(task: t))),
         icon: const Icon(Icons.visibility),
         label: const Text('Ver firma'),
       ));
@@ -156,24 +168,30 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         onPressed: _busy
             ? null
             : () async {
-                await Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => SignatureScreen(task: t)));
-                ref.invalidate(taskDetailProvider(t.id));
-                ref.invalidate(tasksListProvider);
-              },
+          await Navigator.push(context,
+              MaterialPageRoute(builder: (_) => SignatureScreen(task: t)));
+          ref.invalidate(taskDetailProvider(t.id));
+          ref.invalidate(tasksListProvider);
+        },
         icon: const Icon(Icons.draw),
         label: const Text('Firmar'),
       ));
     } else if (t.stage.alias != 'Finalizada') {
       // Solo horas: se puede finalizar a partir del día programado.
-      final soloHoras = ref.read(sessionControllerProvider).profile?.config.soloHoras ?? false;
+      final soloHoras = ref
+          .read(sessionControllerProvider)
+          .profile
+          ?.config
+          .soloHoras ?? false;
       final dia = t.fechaServicio == null ? null : soloDia(t.fechaServicio!);
-      final pronto = soloHoras && dia != null && dia.isAfter(soloDia(DateTime.now()));
+      final pronto = soloHoras && dia != null &&
+          dia.isAfter(soloDia(DateTime.now()));
       parts.add(FilledButton.icon(
         style: FilledButton.styleFrom(backgroundColor: Colors.green.shade700),
         onPressed: _busy || pronto ? null : () => _finalizarTarea(t),
         icon: const Icon(Icons.check_circle),
-        label: Text(pronto ? 'Finalizar desde el ${fmtDia(dia)}' : 'Finalizar tarea'),
+        label: Text(
+            pronto ? 'Finalizar desde el ${fmtDia(dia)}' : 'Finalizar tarea'),
       ));
     }
     if (parts.isEmpty) return null;
@@ -182,13 +200,18 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       if (i > 0) row.add(const SizedBox(width: 8));
       row.add(Expanded(child: parts[i]));
     }
-    return SafeArea(child: Padding(padding: const EdgeInsets.all(12), child: Row(children: row)));
+    return SafeArea(child: Padding(
+        padding: const EdgeInsets.all(12), child: Row(children: row)));
   }
 
   Future<void> _finalizarTarea(TaskDetail t) async {
     // Guarda: sin "solo horas" no se finaliza una tarea que no se ha iniciado
     // (se mira 'iniciada', no 'pendientes', para no bloquear recursos ya cerrados).
-    final soloHoras = ref.read(sessionControllerProvider).profile?.config.soloHoras ?? false;
+    final soloHoras = ref
+        .read(sessionControllerProvider)
+        .profile
+        ?.config
+        .soloHoras ?? false;
     if (!soloHoras && !t.recursos.any((r) => r.esMio && r.iniciada)) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Inicia la tarea antes de finalizarla.')));
@@ -206,35 +229,15 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       ref.invalidate(taskDetailProvider(t.id));
       final fresh = await ref.read(tasksRepoProvider).detail(t.id);
       if (!mounted) return;
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => SignatureScreen(task: fresh)));
+      await Navigator.push(context,
+          MaterialPageRoute(builder: (_) => SignatureScreen(task: fresh)));
       ref.invalidate(taskDetailProvider(t.id));
       ref.invalidate(tasksListProvider);
     } catch (e) {
       if (mounted) await mostrarErrorAccion(context, e);
     }
   }
-
-
-
-  Future<void> _reopen(TaskDetail t) async {
-    setState(() => _busy = true);
-    try {
-      await ref.read(tasksRepoProvider).reopen(t.id);
-      // Al reabrir, retira del libro las pausas imputadas de sus recursos para
-      // que no cuenten si la tarea ya no se vuelve a cerrar.
-      for (final r in t.recursos) {
-        await ref.read(journeyLedgerProvider).removeDeclared(r.id);
-      }
-      ref.invalidate(taskDetailProvider(t.id));
-      ref.invalidate(tasksListProvider);
-    } catch (e) {
-      if (mounted) await mostrarErrorAccion(context, e);
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  }
+}
 
 // ============================ Cuerpo (presentación) ============================
 class _Body extends ConsumerWidget {            // ← era StatelessWidget

@@ -1,7 +1,7 @@
 name: gruas_app
 description: APP móvil Grúas Salvador (conductores y jefes de tráfico).
 publish_to: "none"
-version: 3.0.0+11
+version: 3.0.0+12
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

@@ -91,6 +91,78 @@ double facturableDuracion(double horas, double comida, ReglaComida regla) {
   final f = regla == ReglaComida.siempre ? horas - comida : horas;
   return f < 0 ? 0.0 : f;
 }
+// ---------------------------------------------------------------------------
+// v3.10 — redondeo parametrizable, facturable por formato y valores iniciales
+// ---------------------------------------------------------------------------
+
+/// v3.10 §4.6 — réplica del redondeo del servidor. Unidad U y tolerancia T en
+/// minutos: base = múltiplo de U inferior; sube a la siguiente si
+/// resto > 0 y resto >= T. Con U = 30 y T = 15 equivale a [round30].
+double redondearFacturable(double horas, {int unidadMin = 30, int toleranciaMin = 15}) {
+  if (horas <= 0) return 0.0;
+  const eps = 1e-6; // minutos calculados desde fechas (segundos/3600*60)
+  final u = unidadMin > 0 ? unidadMin : 30;
+  final m = horas * 60.0;
+  final base = ((m + eps) / u).floorToDouble() * u;
+  final resto = m - base;
+  final sube = resto > eps && resto >= toleranciaMin - eps;
+  return (sube ? base + u : base) / 60.0;
+}
+
+/// v3.10 §4.2 — facturable provisional SOLO para decidir si se pregunta por
+/// incidencia (el servidor es la autoridad). [bruto] = H en los formatos de horas
+/// o la ventana V en inicio y fin; [comida] en horas. Redondeo una vez, al final.
+double facturableTiempo(
+  double bruto,
+  double comida,
+  ReglaComida regla, {
+  required bool esInicioFin,
+  int unidadMin = 30,
+  int toleranciaMin = 15,
+}) {
+  final descuenta = regla == ReglaComida.siempre ||
+      (regla == ReglaComida.soloHorario && esInicioFin);
+  final f = descuenta ? bruto - comida : bruto;
+  return redondearFacturable(f < 0 ? 0.0 : f,
+      unidadMin: unidadMin, toleranciaMin: toleranciaMin);
+}
+
+/// Horas al múltiplo de [pasoMin] más cercano (tecleo y pasos del selector).
+double ajustarHorasAPaso(double horas, int pasoMin) {
+  final p = pasoMin > 0 ? pasoMin : 30;
+  return (horas * 60.0 / p).roundToDouble() * p / 60.0;
+}
+
+/// Hora local ajustada hacia ATRÁS al paso (nunca queda en el futuro).
+DateTime ajustarHoraAPaso(DateTime t, int pasoMin) {
+  final p = pasoMin > 0 ? pasoMin : 30;
+  final l = t.toLocal();
+  final min = (l.hour * 60 + l.minute) ~/ p * p;
+  return DateTime(l.year, l.month, l.day, min ~/ 60, min % 60);
+}
+
+/// v3.10 — valor inicial del selector de horas.
+/// - Con inicio real (tarea iniciada en la APP) y reciente (≤ 16 h): el tiempo
+///   transcurrido, ajustado al paso.
+/// - Si no (solo horas o cierre olvidado): [previstas] (o 1 h).
+/// Acotado a [paso, horasTotalesMax].
+double horasInicialesV310({
+  DateTime? inicioReal,
+  double? previstas,
+  int pasoMin = 30,
+  DateTime? ahora,
+}) {
+  final now = ahora ?? DateTime.now();
+  final paso = (pasoMin > 0 ? pasoMin : 30) / 60.0;
+  double v;
+  if (inicioReal != null && now.isAfter(inicioReal) &&
+      horasDesde(inicioReal, ahora: now) <= umbralOlvidoHoras) {
+    v = ajustarHorasAPaso(horasDesde(inicioReal, ahora: now), pasoMin);
+  } else {
+    v = ajustarHorasAPaso(previstas ?? 1.0, pasoMin);
+  }
+  return v.clamp(paso, horasTotalesMax).toDouble();
+}
 
 /// Inicios/fines de comida posibles: :00 y :30 de reloj (hora local) dentro de
 /// [inicio, fin], con el fin normalizado por medianoche.

@@ -9,9 +9,11 @@ import '../../../shared/selector_hora.dart';
 import '../../../shared/location.dart';
 import '../../../shared/pausa_dialog.dart' show fmtHoras;
 import '../../../shared/widgets/upgrade_required.dart';
+import '../../../shared/formulario_tiempo.dart';
 import '../task_models.dart';
 import '../tasks_providers.dart';
 import '../../auth/session_controller.dart';
+import '../../auth/session_models.dart';
 import 'jornada_aviso.dart';
 
 
@@ -197,19 +199,42 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
       if (mounted) setState(() => _busy = false);
     }
   }
-  /// Solo horas (v3.8 §6.3): día de ejecución (planificado … hoy) + horas.
-  /// El servidor usa la hora planificada en ese día.
+    /// Solo horas (v3.10 §4.5.3): día de ejecución (planificado … hoy) y el tiempo
+  /// con los formatos de la compañía. Tiempo real, sin redondeo.
   Future<void> _completarHoras(TaskDetail t) async {
-    final v = await _pedirDiaHoras(t);
-    if (v == null || !mounted) return;
+    final cfg = ref.read(sessionControllerProvider).profile?.config ?? SessionConfig.fallback;
+    final dia = await _pedirDia(t);
+    if (dia == null || !mounted) return;
+
+    // Al modificar, se precargan el inicio y las horas ya informados de ese día.
+    final ap = t.aperturaInformada, ci = t.cierreInformada;
+    final previa = t.completada && ap != null && soloDia(ap) == dia;
+    final plan = t.fechaServicio?.toLocal();
+    final propuesto = previa
+        ? ap.toLocal()
+        : DateTime(dia.year, dia.month, dia.day, plan?.hour ?? 8, plan?.minute ?? 0);
+    final horas = (previa && ci != null) ? horasEntre(ap, ci) : t.horasPrevistas;
+
+    final tiempo = await pedirTiempo(
+      context,
+      formatos: cfg.formatosCierre,
+      cfg: cfg,
+      inicioPropuesto: propuesto,
+      dia: dia,
+      horasPrevistas: horas,
+      titulo: t.completada ? 'Modificar horas' : 'Completar tarea',
+      subtitulo: 'Día ${fmtDia(dia)}',
+    );
+    if (tiempo == null || !mounted) return;
+
     setState(() => _busy = true);
     try {
       final (lat, lng) = await bestEffortLocation();
       if (!mounted) return;
       final res = await conConfirmacionDuracion(
         context,
-        (confirmar) => ref.read(tasksRepoProvider).completeHoras(t.id,
-            fecha: v.dia, horasTotales: v.horas, confirmar: confirmar, lat: lat, lng: lng),
+        (confirmar) => ref.read(tasksRepoProvider).completeTiempo(t.id,
+            fecha: dia, tiempo: tiempo, confirmar: confirmar, lat: lat, lng: lng),
       );
       if (res == null) return; // eligió revisar
       ref.invalidate(taskDetailProvider(t.id));
@@ -222,7 +247,8 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
     }
   }
 
-  Future<({DateTime dia, double horas})?> _pedirDiaHoras(TaskDetail t) async {
+  /// Día de ejecución entre el planificado y hoy. Si solo puede ser hoy, no pregunta.
+  Future<DateTime?> _pedirDia(TaskDetail t) async {
     final hoy = soloDia(DateTime.now());
     final primero = t.fechaServicio == null ? hoy : soloDia(t.fechaServicio!);
     if (primero.isAfter(hoy)) {
@@ -230,88 +256,19 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
           content: Text('Esta tarea está programada para el ${fmtDia(primero)}.')));
       return null;
     }
-    // Al modificar, se precargan el día y las horas ya informados.
-    DateTime dia = t.completada && t.aperturaInformada != null
-        ? soloDia(t.aperturaInformada!)
-        : hoy;
-    if (dia.isBefore(primero) || dia.isAfter(hoy)) dia = hoy;
-    double? horas = (t.completada && t.aperturaInformada != null && t.cierreInformada != null)
-        ? round30(horasEntre(t.aperturaInformada!, t.cierreInformada!))
-        : null;
-
-    return showModalBottomSheet<({DateTime dia, double horas})>(
+    if (!primero.isBefore(hoy)) return hoy;
+    final ap = t.aperturaInformada;
+    var inicial = t.completada && ap != null ? soloDia(ap) : hoy;
+    if (inicial.isBefore(primero) || inicial.isAfter(hoy)) inicial = hoy;
+    return showDatePicker(
       context: context,
-      isScrollControlled: true,
-      builder: (sheetCtx) => StatefulBuilder(
-        builder: (ctx, setSheet) {
-          Future<void> elegirDia() async {
-            final d = await showDatePicker(
-              context: ctx,
-              initialDate: dia,
-              firstDate: primero,
-              lastDate: hoy,
-              helpText: 'Día en que se hizo',
-            );
-            if (d != null) setSheet(() => dia = d);
-          }
-
-          Future<void> elegirHoras() async {
-            final res = await pickHorasTotales(ctx,
-                inicial: horas ?? 1.0, titulo: '¿Cuántas horas?');
-            if (res != null) setSheet(() => horas = res.horas);
-          }
-
-          return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(t.completada ? 'Modificar horas' : 'Completar tarea',
-                      style: Theme.of(ctx).textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.event),
-                    title: const Text('Día'),
-                    trailing: Text(fmtDia(dia),
-                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                    // Si solo puede ser hoy, no hay nada que elegir.
-                    onTap: primero.isBefore(hoy) ? elegirDia : null,
-                  ),
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.timelapse),
-                    title: const Text('Horas'),
-                    trailing: Text(horas == null ? 'Elegir…' : fmtHoras(horas!),
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: horas == null ? Theme.of(ctx).colorScheme.primary : null,
-                        )),
-                    onTap: elegirHoras,
-                  ),
-                  const SizedBox(height: 12),
-                  FilledButton(
-                    style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
-                    onPressed: horas == null
-                        ? null
-                        : () => Navigator.pop(sheetCtx, (dia: dia, horas: horas!)),
-                    child: Text(t.completada ? 'Guardar' : 'Completar'),
-                  ),
-                  TextButton(
-                    onPressed: () => Navigator.pop(sheetCtx),
-                    child: const Text('Cancelar'),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
+      initialDate: inicial,
+      firstDate: primero,
+      lastDate: hoy,
+      helpText: 'Día en que se hizo',
     );
   }
+
 
   /// Hoja de inicio/duración (v3).
   /// - Inicio entre el día programado y hoy (lo normal, hoy).

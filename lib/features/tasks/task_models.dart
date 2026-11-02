@@ -38,6 +38,10 @@ class TaskSummary {
   final bool faltaFirma;
   /// v3: última solicitud de firma (enlace), o null.
   final SolicitudFirma? solicitudFirma;
+  /// v3.10 §4.7: valor inicial del selector de horas (o null).
+  final double? horasPrevistas;
+  /// v3.11: descripción de la actividad (tareas creadas por el conductor); null en el resto.
+  final String? actividad;
 
   const TaskSummary({
     required this.id,
@@ -60,10 +64,16 @@ class TaskSummary {
     this.tipoInterna,
     this.faltaFirma = false,
     this.solicitudFirma,
+    this.horasPrevistas,
+    this.actividad,
   });
   bool get esNoFacturable => tipo == 'no_facturable';
   static String? _nm(dynamic v) => v is Map ? v['name']?.toString() : null;
   static String? _recargo(dynamic v) => v is Map ? v['label']?.toString() : null;
+  static String? _texto(dynamic v) {
+    final s = v?.toString().trim();
+    return (s == null || s.isEmpty) ? null : s;
+  }
 
   factory TaskSummary.fromJson(Map<String, dynamic> j) => TaskSummary(
         id: j['id'] as int,
@@ -96,6 +106,8 @@ class TaskSummary {
         solicitudFirma: j['firma'] is Map
             ? SolicitudFirma.fromJson((j['firma'] as Map)['solicitud'])
             : null,
+        horasPrevistas: (j['horas_previstas'] as num?)?.toDouble(),
+        actividad: _texto(j['actividad']),
       );
 }
 
@@ -166,6 +178,8 @@ class Recurso {
   final bool aplicarMinimo;
   /// v3 (propuesta contrato: resumen_albaran por recurso).
   final ResumenAlbaran? resumenAlbaran;
+  /// v3.10 §4.7: horas previstas del recurso (o null).
+  final double? horasPrevistas;
 
   const Recurso({
     required this.id, required this.recurso, this.empleado,
@@ -173,6 +187,7 @@ class Recurso {
     required this.hayTramoAbierto, required this.horasFacturar,
     required this.servicioMinimo, required this.incidencia,
     this.aperturaInformada, required this.aplicarMinimo, this.resumenAlbaran,
+    this.horasPrevistas,
   });
 
   factory Recurso.fromJson(Map<String, dynamic> j) => Recurso(
@@ -189,6 +204,7 @@ class Recurso {
         aperturaInformada: parseOdooDt(j['apertura_informada']?.toString()),
         aplicarMinimo: j['aplicar_minimo'] == true,
         resumenAlbaran: ResumenAlbaran.fromJson(j['resumen_albaran']),
+        horasPrevistas: (j['horas_previstas'] as num?)?.toDouble(),
       );
 }
 
@@ -264,6 +280,8 @@ class TaskDetail extends TaskSummary {
     super.tipoInterna,
     super.faltaFirma,
     super.solicitudFirma,
+    super.horasPrevistas,
+    super.actividad,
     required this.carga,
     required this.descarga,
     required this.worksheet,
@@ -314,6 +332,8 @@ class TaskDetail extends TaskSummary {
       tipoInterna: s.tipoInterna,
       faltaFirma: s.faltaFirma,
       solicitudFirma: s.solicitudFirma,
+      horasPrevistas: s.horasPrevistas,
+      actividad: s.actividad,
       deca: Deca.fromJson(j['deca']),
       obra: Obra.fromJson(j['obra']),
       servicio: ServicioPrincipal.fromJson(j['servicio']),

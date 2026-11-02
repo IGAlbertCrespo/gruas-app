@@ -59,7 +59,7 @@ class OperatorProfile {
 /// la APP oculta la acción y el servidor respondería 403 sin_permiso.
 class Permisos {
   final bool cambiarServicio, anadirCargos, anularCargos,
-      editarRecargo, editarSalida, firmaDiferida;
+      editarRecargo, editarSalida, firmaDiferida, crearTareas;
   const Permisos({
     this.cambiarServicio = false,
     this.anadirCargos = false,
@@ -67,6 +67,7 @@ class Permisos {
     this.editarRecargo = false,
     this.editarSalida = false,
     this.firmaDiferida = false,
+    this.crearTareas = false, // v3.11
   });
 
   factory Permisos.fromJson(Map<String, dynamic> j) => Permisos(
@@ -76,7 +77,70 @@ class Permisos {
         editarRecargo: j['editar_recargo'] == true,
         editarSalida: j['editar_salida'] == true,
         firmaDiferida: j['firma_diferida'] == true,
+        crearTareas: j['crear_tareas'] == true, // v3.11
       );
+}
+/// v3.10: cómo declara el conductor el tiempo al terminar (CONTRATO §2, §4.1).
+enum FormatoCierre {
+  horas('horas', 'Horas', 'Solo el número de horas'),
+  inicioHoras('inicio_horas', 'Inicio + horas', 'Hora de inicio y número de horas'),
+  inicioFin('inicio_fin', 'Inicio y fin', 'Hora de inicio y hora de fin');
+
+  const FormatoCierre(this.wire, this.label, this.ayuda);
+
+  /// Valor que viaja en la API.
+  final String wire;
+  final String label;
+  final String ayuda;
+
+  bool get pideInicio => this != FormatoCierre.horas;
+  bool get pideFin => this == FormatoCierre.inicioFin;
+}
+
+/// v3.10: duración de comida ofrecida por la compañía ("Sin comida" la añade la APP).
+class ComidaOpcion {
+  final int minutos;
+  final String label;
+  final bool defecto;
+
+  const ComidaOpcion({required this.minutos, required this.label, this.defecto = false});
+
+  double get horas => minutos / 60.0;
+
+  static ComidaOpcion? fromJson(dynamic j) {
+    if (j is! Map) return null;
+    final m = (j['minutos'] as num?)?.toInt() ?? 0;
+    if (m <= 0) return null;
+    return ComidaOpcion(
+      minutos: m,
+      label: j['label']?.toString() ?? '$m min',
+      defecto: j['defecto'] == true,
+    );
+  }
+}
+
+/// v3.10: paso de los selectores y redondeo del facturable (CONTRATO §2, §4.6).
+class TiempoConfig {
+  final int pasoMin;
+  final int redondeoMin;
+  final int toleranciaMin;
+
+  const TiempoConfig({this.pasoMin = 30, this.redondeoMin = 30, this.toleranciaMin = 15});
+
+  double get pasoHoras => pasoMin / 60.0;
+
+  factory TiempoConfig.fromJson(dynamic j) {
+    if (j is! Map) return const TiempoConfig();
+    int leer(String k, int defecto) => (j[k] as num?)?.toInt() ?? defecto;
+    final paso = leer('paso_min', 30);
+    final unidad = leer('redondeo_min', 30);
+    final u = unidad > 0 ? unidad : 30;
+    return TiempoConfig(
+      pasoMin: paso > 0 ? paso : 30,
+      redondeoMin: u,
+      toleranciaMin: leer('tolerancia_min', 15).clamp(0, u).toInt(),
+    );
+  }
 }
 
 class SessionConfig {
@@ -101,6 +165,14 @@ class SessionConfig {
   final bool controlJornada;
   /// v3.9: con cierre por horas totales, preguntar la comida. Ausente → true.
   final bool comidaEnHoras;
+  /// v3.10: formatos permitidos, en orden fijo (horas, inicio_horas, inicio_fin).
+  final List<FormatoCierre> formatosCierre;
+  /// v3.10: duraciones de comida (sin "Sin comida": la añade la APP).
+  final List<ComidaOpcion> comidaOpciones;
+  /// v3.10: paso de registro y redondeo del facturable.
+  final TiempoConfig tiempo;
+  /// v3.11: días admitidos para la fecha de una tarea creada (hoy incluido).
+  final int actividadesDias;
 
 
   const SessionConfig({
@@ -118,6 +190,10 @@ class SessionConfig {
     this.soloHoras = false,
     this.controlJornada = false,
     this.comidaEnHoras = true,
+    this.formatosCierre = const [FormatoCierre.inicioFin],
+    this.comidaOpciones = _comidaOpcionesDefecto,
+    this.tiempo = const TiempoConfig(),
+    this.actividadesDias = 7,
   });
 
   bool get inicioPlanificado => modoInicio == 'planificada';
@@ -126,6 +202,47 @@ class SessionConfig {
   bool get comidaNunca => comida == 'nunca';
   /// ¿Se pregunta la comida en un cierre por horas totales? (v3.9)
   bool get preguntaComidaEnHoras => !comidaNunca && comidaEnHoras;
+  /// v3.10: ¿se pregunta la comida con este formato? En inicio y fin, siempre
+  /// (salvo `nunca`); en los de horas, según `comida_en_horas`.
+  bool preguntaComida(FormatoCierre f) =>
+      !comidaNunca && (f == FormatoCierre.inicioFin || comidaEnHoras);
+
+  /// Minutos de la opción marcada por defecto (una sola, §2); si no hay, la primera.
+  int get comidaDefectoMin {
+    if (comidaOpciones.isEmpty) return 0;
+    return comidaOpciones
+        .firstWhere((o) => o.defecto, orElse: () => comidaOpciones.first)
+        .minutos;
+  }
+
+  static const _comidaOpcionesDefecto = [
+    ComidaOpcion(minutos: 30, label: '½ h', defecto: true),
+    ComidaOpcion(minutos: 60, label: '1 h'),
+  ];
+
+  /// v3.10 `formatos_cierre`. Sin la clave (servidor anterior) se deduce de
+  /// `solo_horas` / `modo_cierre`, con la misma regla que la migración del servidor.
+  static List<FormatoCierre> _formatosDe(Map<String, dynamic> j) {
+    final soloHoras = j['solo_horas'] == true;
+    final raw = j['formatos_cierre'];
+    if (raw is List) {
+      final out = [
+        for (final f in FormatoCierre.values)
+          if (raw.contains(f.wire) && (soloHoras || f != FormatoCierre.horas)) f,
+      ];
+      if (out.isNotEmpty) return out;
+    }
+    if (soloHoras) return const [FormatoCierre.horas];
+    return switch (j['modo_cierre']) {
+      'duracion' => const [FormatoCierre.inicioHoras],
+      'elegir' => const [FormatoCierre.inicioHoras, FormatoCierre.inicioFin],
+      _ => const [FormatoCierre.inicioFin],
+    };
+  }
+
+  static List<ComidaOpcion> _comidaOpcionesDe(dynamic raw) => raw is List
+      ? raw.map(ComidaOpcion.fromJson).whereType<ComidaOpcion>().toList()
+      : _comidaOpcionesDefecto;
   /// La jornada la construye el servidor a partir de las tareas: sin fichaje manual.
   bool get jornadaDesdeTareas => soloHoras && controlJornada;
 
@@ -146,6 +263,11 @@ class SessionConfig {
         soloHoras: j['solo_horas'] == true,
         controlJornada: j['control_jornada'] == true,
         comidaEnHoras: j['comida_en_horas'] != false, // v3.9: ausente → true
+        formatosCierre: _formatosDe(j),                         // v3.10
+        comidaOpciones: _comidaOpcionesDe(j['comida_opciones']), // v3.10
+        tiempo: TiempoConfig.fromJson(j['tiempo']),             // v3.10
+        actividadesDias:                                        // v3.11
+            ((j['actividades_dias'] as num?)?.toInt() ?? 7).clamp(1, 366).toInt(),
   );
 
   /// "HH:MM" (contrato) → minutos. Tolera un número decimal (14.5 = 14:30).

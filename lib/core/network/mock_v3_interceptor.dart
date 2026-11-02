@@ -29,6 +29,11 @@ class MockV3Interceptor extends Interceptor {
   static final _finalizeRe = RegExp(r'/tasks/(\d+)/finalize$');
   static final _solicitudesRe = RegExp(r'/firma/solicitudes$');
   static final _loteRe = RegExp(r'/firma/lote$');
+  // v3.11: tareas creadas por el conductor
+  static final _actividadesRe = RegExp(r'/actividades$');
+  static final _vehiculosRe = RegExp(r'/vehiculos$');
+  static final _crearRe = RegExp(r'/tasks$');
+  static final _detalleRe = RegExp(r'/tasks/(\d+)$');
 
   static const _candidatos = [
     {'line_id': 9001, 'producto': 'Camión grúa 100 t (mock)', 'cambia_minimo': false},
@@ -39,7 +44,48 @@ class MockV3Interceptor extends Interceptor {
     {'product_id': 78, 'producto': 'Ventosa'},
     {'product_id': 79, 'producto': 'Eslingas'},
   ];
+  static const _actividades = [
+    {'line_id': 7001, 'descripcion': 'Mantenimiento: engrase (mock)'},
+    {'line_id': 7002, 'descripcion': 'Limpieza del camión (mock)'},
+    {'line_id': 7003, 'descripcion': 'Recoger a un compañero en obra (mock)'},
+    {'line_id': 7004, 'descripcion': 'Desplazamiento a obra (mock)'},
+  ];
+  static const _vehiculos = [
+    {'id': 31, 'nombre': 'Camión grúa 80 t Palfinger PK 78002 (mock)',
+     'matricula': '1234ABC', 'habitual': true},
+    {'id': 44, 'nombre': 'Furgoneta taller (mock)', 'matricula': '5678DEF', 'habitual': false},
+    {'id': 52, 'nombre': 'Turismo (mock)', 'matricula': '9012GHI', 'habitual': false},
+  ];
 
+  /// Tareas creadas en esta sesión (se añaden a la lista y responden al detalle).
+  final List<Map<String, dynamic>> _creadas = [];
+  int _nextCreada = 880001;
+
+  Map<String, dynamic> _tareaCreada(
+      Map d, Map<String, dynamic> act, Map<String, dynamic> veh) {
+    final ini = _utc(d['apertura_informada']) ?? _utc('${d['fecha']} 06:00:00')!;
+    final h = (d['horas_totales'] as num?)?.toDouble() ?? 1.0;
+    final fin = _utc(d['cierre_informada']) ?? ini.add(Duration(minutes: (h * 60).round()));
+    return {
+      'id': _nextCreada++,
+      'name': 'INTERNO * ${act['descripcion']} - Conductor (mock)',
+      'tipo': 'no_facturable',
+      'cerrada': true,
+      'completada': true,
+      'actividad': act['descripcion'],
+      'tipo_interna': {'value': 'interna', 'label': 'Interna'},
+      'stage': {'id': 0, 'name': 'Completada', 'alias': 'Completada'},
+      'fecha_servicio': _utcStr(ini),
+      'vehicle': {'id': veh['id'], 'name': veh['matricula']},
+      'apertura': {'hora_informada': _utcStr(ini)},
+      'cierre': {'hora_informada': _utcStr(fin)},
+      'notas_chofer': d['obs'],
+      'firma': null,
+      'worksheet': <String, dynamic>{},
+      'carga': <String, dynamic>{},
+      'descarga': <String, dynamic>{},
+    };
+  }
   /// Recargo/salida elegidos: {taskId: {campo: value}}.
   final Map<int, Map<String, String>> _sel = {};
 
@@ -117,6 +163,28 @@ class MockV3Interceptor extends Interceptor {
     final d = options.data;
     final post = options.method == 'POST';
     final path = options.path;
+    // v3.11: actividades, vehículos y creación de tareas (en memoria).
+    if (!post && _actividadesRe.hasMatch(path)) {
+      return handler.resolve(_ok(options, _actividades));
+    }
+    if (!post && _vehiculosRe.hasMatch(path)) {
+      return handler.resolve(_ok(options, _vehiculos));
+    }
+    if (post && _crearRe.hasMatch(path) && d is Map) {
+      final act = _actividades.where((a) => a['line_id'] == d['line_id']).firstOrNull;
+      final veh = _vehiculos.where((v) => v['id'] == d['vehicle_id']).firstOrNull;
+      if (act == null || veh == null) {
+        return handler.reject(_error(options, 'datos_invalidos', 'Actividad o vehículo no válidos.'));
+      }
+      final t = _tareaCreada(d, act, veh);
+      _creadas.insert(0, t);
+      return handler.resolve(_ok(options, t));
+    }
+    final mDet = _detalleRe.firstMatch(path);
+    if (!post && mDet != null) {
+      final t = _creadas.where((x) => x['id'] == int.parse(mDet[1]!)).firstOrNull;
+      if (t != null) return handler.resolve(_ok(options, t));
+    }
 
     if (post && _close.hasMatch(path) && d is Map<String, dynamic> && d.containsKey('modo_cierre')) {
       options.data = _closeV3aV2(d);
@@ -345,6 +413,7 @@ class MockV3Interceptor extends Interceptor {
           _marcarLote(t);
           t.putIfAbsent('firma', () => _firmaDe(t['id'] as int?, t['has_signature'] == true));
         }
+        (data['tasks'] as List).insertAll(0, _creadas); // v3.11: creadas en el mock
       } else if (data.containsKey('worksheet')) {
         _detalle(data); // cualquier respuesta con forma de _task_detail
       }
@@ -369,12 +438,17 @@ class MockV3Interceptor extends Interceptor {
           'editar_salida': true,
           'firma_diferida': true,
         });
+    // v3.11: crear tareas activo en QA.
+    final permisos = c['permisos'];
+    if (permisos is Map) permisos.putIfAbsent('crear_tareas', () => true);
+    c.putIfAbsent('actividades_dias', () => 7);
     if (kMockSoloHoras) {
       c['solo_horas'] = true;
       c['control_jornada'] = true;
       c['modo_inicio'] = 'planificada';
       c['modo_cierre'] = 'duracion';
       c['tramos'] = false;
+      c['formatos_cierre'] = ['horas', 'inicio_horas', 'inicio_fin']; // v3.10
     }
   }
 

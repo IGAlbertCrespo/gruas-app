@@ -1,5 +1,7 @@
 import '../../core/network/api_client.dart';
 import 'task_models.dart';
+import 'actividad_models.dart';
+import '../../shared/formulario_tiempo.dart' show TiempoDeclarado;
 
 String _two(int n) => n.toString().padLeft(2, '0');
 
@@ -8,6 +10,21 @@ String _fmtUtc(DateTime d) {
   final u = d.toUtc();
   return '${u.year.toString().padLeft(4, '0')}-${_two(u.month)}-${_two(u.day)} '
       '${_two(u.hour)}:${_two(u.minute)}:${_two(u.second)}';
+}
+
+/// v3.10 §4.1 — tiempo declarado → body. `apertura_informada` solo si
+/// [enviarInicio] (solo horas, o inicio corregido de una tarea iniciada).
+Map<String, dynamic> _tiempoBody(TiempoDeclarado t, {required bool enviarInicio}) {
+  final ini = t.inicio, fin = t.fin, ci = t.comidaInicio;
+  return {
+    'formato': t.formato.wire,
+    if (enviarInicio && ini != null) 'apertura_informada': _fmtUtc(ini),
+    if (fin != null) 'cierre_informada': _fmtUtc(fin),
+    if (t.horas != null) 'horas_totales': t.horas,
+    'comida': t.comidaMin > 0
+        ? {'minutos': t.comidaMin, if (ci != null) 'inicio': _fmtUtc(ci)}
+        : null,
+  };
 }
 
 class TasksRepository {
@@ -52,48 +69,34 @@ class TasksRepository {
           : null,
     );
   }
-    /// Cierra UN recurso (CONTRATO v3.1 §4.1). No mueve etapa. El servidor
-  /// calcula el facturable y decide el mínimo. `apertura_informada` no se envía
-  /// (el servidor usa la guardada).
-  Future<({TaskDetail task, JornadaStart? jornada})> close(int id, {
-    required String modoCierre,      // 'hora' | 'duracion'
-    DateTime? aperturaInformada,     // solo si el conductor corrigió el inicio
-    DateTime? cierreInformada,
-    double? horasTotales,
-    DateTime? comidaInicio,
-    DateTime? comidaFin,
-    double? comidaDuracion,
+  /// v3.10 §4.1 — cierre de UN recurso con el tiempo declarado. El servidor
+  /// calcula el facturable (redondeo de la compañía) y decide el mínimo.
+  Future<({TaskDetail task, JornadaStart? jornada})> close(
+    int id, {
+    required TiempoDeclarado tiempo,
+    required bool enviarInicio,
     bool incidencia = false,
     String? obsAlbaran,
     bool confirmar = false,
     double? lat,
     double? lng,
   }) async {
-    Map<String, dynamic>? comida;
-    if (modoCierre == 'hora' && comidaInicio != null && comidaFin != null) {
-      comida = {'inicio': _fmtUtc(comidaInicio), 'fin': _fmtUtc(comidaFin)};
-    } else if (modoCierre == 'duracion' && (comidaDuracion ?? 0) > 0) {
-      comida = {'duracion': comidaDuracion};
-    }
     final res = await api.postJson('/tasks/$id/close', data: {
-      'modo_cierre': modoCierre,
-      if (aperturaInformada != null) 'apertura_informada': _fmtUtc(aperturaInformada),
-      if (cierreInformada != null) 'cierre_informada': _fmtUtc(cierreInformada),
-      if (horasTotales != null) 'horas_totales': horasTotales,
-      'comida': comida,
+      ..._tiempoBody(tiempo, enviarInicio: enviarInicio),
       'incidencia': incidencia,
       if (obsAlbaran != null) 'obs_albaran': obsAlbaran,
       if (confirmar) 'confirmar': true,
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
     });
-      return (
+    return (
       task: TaskDetail.fromJson(res),
       jornada: res['jornada'] is Map
           ? JornadaStart.fromJson(res['jornada'] as Map<String, dynamic>)
           : null,
     );
   }
+
   /// v3.1 §5.1 — sobre la MADRE. El servidor recalcula el % y lo propaga a los cargos.
   Future<TaskDetail> setRecargo(int id, String tipo) async {
     final res = await api.postJson('/tasks/$id/recargo', data: {'tipo': tipo});
@@ -159,12 +162,12 @@ class TasksRepository {
           : null,
     );
   }
-  /// v3.8 §6.3 — no facturable con "solo horas": día de ejecución + horas.
-  /// El servidor usa la hora planificada en ese día.
-  Future<({TaskDetail task, JornadaStart? jornada})> completeHoras(
+   /// v3.10 §4.5.3 — no facturable con solo horas: día de ejecución + tiempo
+  /// declarado con los formatos de la compañía. Tiempo real, sin redondeo.
+  Future<({TaskDetail task, JornadaStart? jornada})> completeTiempo(
     int id, {
     required DateTime fecha,
-    required double horasTotales,
+    required TiempoDeclarado tiempo,
     bool confirmar = false,
     double? lat,
     double? lng,
@@ -172,7 +175,7 @@ class TasksRepository {
     final dia = '${fecha.year.toString().padLeft(4, '0')}-${_two(fecha.month)}-${_two(fecha.day)}';
     final res = await api.postJson('/tasks/$id/complete', data: {
       'fecha': dia,
-      'horas_totales': horasTotales,
+      ..._tiempoBody(tiempo, enviarInicio: true),
       if (confirmar) 'confirmar': true,
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
@@ -184,7 +187,52 @@ class TasksRepository {
           : null,
     );
   }
+    // ---------------------------------------------------------------------------
+  // v3.11 §4.8 — tareas creadas por el conductor
+  // ---------------------------------------------------------------------------
 
+  /// Catálogo de actividades (líneas del pedido interno).
+  Future<List<Actividad>> actividades() async {
+    final res = await api.getJson('/actividades');
+    return Actividad.listFromJson(res['data']);
+  }
+
+  /// Vehículos "Disponible en APP" (habituales primero).
+  Future<List<VehiculoApp>> vehiculos() async {
+    final res = await api.getJson('/vehiculos');
+    return VehiculoApp.listFromJson(res['data']);
+  }
+
+  /// [ONLINE] Crea la tarea ya completada. Tiempo real, sin redondeo.
+  Future<({TaskDetail task, JornadaStart? jornada})> crearTarea({
+    required int lineId,
+    required int vehicleId,
+    required DateTime fecha,
+    required TiempoDeclarado tiempo,
+    String? obs,
+    bool confirmar = false,
+    double? lat,
+    double? lng,
+  }) async {
+    final dia = '${fecha.year.toString().padLeft(4, '0')}-${_two(fecha.month)}-${_two(fecha.day)}';
+    final texto = obs?.trim();
+    final res = await api.postJson('/tasks', data: {
+      'line_id': lineId,
+      'vehicle_id': vehicleId,
+      'fecha': dia,
+      ..._tiempoBody(tiempo, enviarInicio: true),
+      if (texto != null && texto.isNotEmpty) 'obs': texto,
+      if (confirmar) 'confirmar': true,
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
+    });
+    return (
+      task: TaskDetail.fromJson(res),
+      jornada: res['jornada'] is Map
+          ? JornadaStart.fromJson(res['jornada'] as Map<String, dynamic>)
+          : null,
+    );
+  }
   /// Finaliza la madre. Con `firmaDiferida` (§6.3) finaliza sin firma y el
   /// servidor genera la solicitud de firma.
   Future<TaskDetail> finalize(int id, {bool firmaDiferida = false, double? lat, double? lng}) async {

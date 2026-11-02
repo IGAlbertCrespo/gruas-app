@@ -7,20 +7,27 @@ import '../task_models.dart';
 import '../tasks_providers.dart';
 import 'task_detail_screen.dart';
 import 'non_billable_detail_screen.dart';
+import 'nueva_tarea_screen.dart';
 import '../../../shared/horas.dart' show fmtDia;
 import '../../../shared/widgets/upgrade_required.dart';
 
 class TasksListScreen extends ConsumerWidget {
   const TasksListScreen({super.key});
 
-  @override
+    @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isManager = ref.watch(sessionControllerProvider).profile?.isManager ?? false;
+    final profile = ref.watch(sessionControllerProvider).profile;
+    final isManager = profile?.isManager ?? false;
     final scope = ref.watch(taskScopeProvider);
     final view = ref.watch(taskViewProvider);
     final listAsync = ref.watch(tasksListProvider);
+    // v3.11: "Añadir tarea" solo con permiso y nunca viendo las de todos (jefe).
+    final puedeCrear = (profile?.config.permisos.crearTareas ?? false) &&
+        !(isManager && scope == 'all');
+    // Margen inferior para que el botón flotante no tape la última tarjeta.
+    final padLista = EdgeInsets.fromLTRB(12, 12, 12, puedeCrear ? 88 : 12);
 
-    return Column(
+    final lista = Column(
       children: [
         // Pendientes (no finalizada+firmada) vs Completadas (finalizada y firmada).
         Padding(
@@ -69,7 +76,7 @@ class TasksListScreen extends ConsumerWidget {
                   final tasks = res.tasks.where(completada).toList();
                   if (tasks.isEmpty) return _vacio('No hay tareas completadas.');
                   return ListView(
-                    padding: const EdgeInsets.all(12),
+                    padding: padLista,
                     children: [for (final t in tasks) _TaskCard(task: t, readOnly: readOnly)],
                   );
                 }
@@ -84,7 +91,7 @@ class TasksListScreen extends ConsumerWidget {
                 if (pendientes.isEmpty) return _vacio('No hay tareas pendientes.');
 
                 return ListView(
-                  padding: const EdgeInsets.all(12),
+                  padding: padLista,
                   children: [
                     if (paraHacer.isNotEmpty) ...[
                       _Cabecera(texto: 'Para hacer', n: paraHacer.length),
@@ -98,6 +105,26 @@ class TasksListScreen extends ConsumerWidget {
                 );
               },
             ),
+          ),
+        ),
+      ],
+    );
+
+    if (!puedeCrear) return lista;
+    return Stack(
+      children: [
+        Positioned.fill(child: lista),
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: FloatingActionButton.extended(
+            heroTag: 'nueva_tarea',
+            onPressed: () => Navigator.push<bool>(
+              context,
+              MaterialPageRoute(fullscreenDialog: true, builder: (_) => const NuevaTareaScreen()),
+            ),
+            icon: const Icon(Icons.add),
+            label: const Text('Añadir tarea'),
           ),
         ),
       ],
@@ -215,7 +242,8 @@ class _NoFacturableCard extends StatelessWidget {
           MaterialPageRoute(
               builder: (_) => NonBillableDetailScreen(taskId: task.id, readOnly: readOnly)),
         ),
-        title: Text(task.name, maxLines: 3, overflow: TextOverflow.ellipsis),
+        // v3.11: en las creadas por el conductor manda la actividad.
+        title: Text(task.actividad ?? task.name, maxLines: 3, overflow: TextOverflow.ellipsis),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -224,6 +252,8 @@ class _NoFacturableCard extends StatelessWidget {
               color: Colors.amber,
               icon: Icons.engineering,
             ),
+            if (task.actividad != null && task.vehicle != null)
+                Text(task.vehicle!, style: const TextStyle(fontWeight: FontWeight.w600)),
             if (task.partner != null)
               Text(task.partner!, style: const TextStyle(color: Colors.black54)),
             if (task.fechaServicio != null)

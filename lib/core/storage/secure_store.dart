@@ -11,6 +11,7 @@ class SecureStore {
   static const _kTokenExpiry = 'session_token_expiry';
   static const _kProfile = 'connection_profile';
   static const _kDeviceId = 'device_fingerprint';
+  static const _kActRecientes = 'actividades_recientes'; // v3.11
 
   Future<void> saveToken(String token, DateTime expiresAt) async {
     await _storage.write(key: _kToken, value: token);
@@ -35,6 +36,14 @@ class SecureStore {
   Future<void> saveDeviceId(String fingerprint) => _storage.write(key: _kDeviceId, value: fingerprint);
   Future<String?> readDeviceId() => _storage.read(key: _kDeviceId);
 
+  /// v3.11: ids de las últimas actividades usadas en este móvil (más reciente primero).
+  Future<List<int>> readActividadesRecientes() async {
+    final v = await _storage.read(key: _kActRecientes);
+    return (v ?? '').split(',').map(int.tryParse).whereType<int>().toList();
+  }
+
+  Future<void> saveActividadesRecientes(List<int> ids) =>
+      _storage.write(key: _kActRecientes, value: ids.join(','));
   /// Borrado total: re-emparejamiento / cierre de sesión completo.
   Future<void> wipe() => _storage.deleteAll();
 }
