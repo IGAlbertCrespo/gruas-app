@@ -34,6 +34,7 @@ class MockV3Interceptor extends Interceptor {
   static final _vehiculosRe = RegExp(r'/vehiculos$');
   static final _crearRe = RegExp(r'/tasks$');
   static final _detalleRe = RegExp(r'/tasks/(\d+)$');
+  static final _obsRe = RegExp(r'/tasks/(\d+)/observaciones$'); // v3.12
 
   static const _candidatos = [
     {'line_id': 9001, 'producto': 'Camión grúa 100 t (mock)', 'cambia_minimo': false},
@@ -108,6 +109,8 @@ class MockV3Interceptor extends Interceptor {
   final Set<int> _diferidas = {};
   final Map<int, Map<String, dynamic>> _solicitudes = {};
   final Set<int> _firmadasLote = {};
+  /// v3.12: observaciones del albarán escritas en esta sesión (id → texto).
+  final Map<int, String> _obs = {};
   int _nextSolicitudId = 50;
   int _nextLote = 1;
 
@@ -242,7 +245,12 @@ class MockV3Interceptor extends Interceptor {
                  'anulado': false, 'origen': 'app', 'anulable': true});
       return handler.next(_aDetalle(options, m));
     }
-
+    // v3.12: POST observaciones → se recuerdan y se pide el detalle.
+    m = _obsRe.firstMatch(path);
+    if (post && m != null && d is Map) {
+      _obs[int.parse(m[1]!)] = (d['obs_albaran'] ?? '').toString().trim();
+      return handler.next(_aDetalle(options, m));
+    }
     // POST anular cargo.
     m = _anularRe.firstMatch(path);
     if (post && m != null) {
@@ -503,6 +511,7 @@ class MockV3Interceptor extends Interceptor {
 
     _marcarLote(t);
     t.putIfAbsent('firma', () => _firmaDe(id, t['has_signature'] == true));
+    _observaciones(t, id);
 
     final ap = t['apertura'];
     final ci = t['cierre'];
@@ -542,6 +551,28 @@ class MockV3Interceptor extends Interceptor {
     }
 
     _aplicarSel(t, simular);
+  }
+  /// v3.12: `obs_albaran` / `obs_editable` en el detalle y en `recursos[]`.
+  /// Lo escrito en esta sesión se copia también al worksheet para que el
+  /// resumen simulado lo muestre.
+  void _observaciones(Map<String, dynamic> t, int? id) {
+    final ws = t['worksheet'];
+    final escrita = id == null ? null : _obs[id];
+    if (escrita != null) {
+      t['obs_albaran'] = escrita.isEmpty ? null : escrita;
+      if (ws is Map) ws['obs_albaran'] = t['obs_albaran'];
+    }
+    t.putIfAbsent('obs_albaran', () => ws is Map ? ws['obs_albaran'] : null);
+    t.putIfAbsent('obs_editable', () => t['has_signature'] != true);
+    final recursos = t['recursos'];
+    if (recursos is! List) return;
+    for (final r in recursos.whereType<Map<String, dynamic>>()) {
+      final rid = r['id'];
+      final rObs = rid is int ? _obs[rid] : null;
+      if (rObs != null) r['obs_albaran'] = rObs.isEmpty ? null : rObs;
+      r.putIfAbsent('obs_albaran', () => rid == id ? t['obs_albaran'] : null);
+      r.putIfAbsent('obs_editable', () => r['es_mio'] == true && t['has_signature'] != true);
+    }
   }
 
   /// Las firmadas en lote simulado se muestran como firmadas y cerradas (solo QA:

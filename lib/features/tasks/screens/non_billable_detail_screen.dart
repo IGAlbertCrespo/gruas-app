@@ -284,19 +284,20 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
   }
 
 
-  /// Hoja de inicio/duración (v3).
+    /// Hoja de inicio/duración (v3).
   /// - Inicio entre el día programado y hoy (lo normal, hoy).
   /// - Fin: "¿Cuánto duró?" en horas desde el inicio. Máximo = tiempo
   ///   transcurrido, así el fin nunca es futuro.
   /// Al modificar, se precargan los valores ya informados.
   Future<({DateTime inicio, DateTime fin, String? obs})?> _pedirInicioFin(TaskDetail t) {
     DateTime? inicio = t.completada ? t.aperturaInformada : null;
-    var obs = (t.obsAlbaran ?? '').trim(); // v3.12: opcional  double? duracion = (t.completada && t.aperturaInformada != null && t.cierreInformada != null)
+    var obs = (t.obsAlbaran ?? '').trim(); // v3.12: opcional
+    double? duracion = (t.completada && t.aperturaInformada != null && t.cierreInformada != null)
         ? round30(horasEntre(t.aperturaInformada!, t.cierreInformada!))
         : null;
     final desde = t.fechaServicio ?? DateTime.now(); // sin fecha programada: solo hoy
 
-    return showModalBottomSheet<({DateTime inicio, DateTime fin})>(
+    return showModalBottomSheet<({DateTime inicio, DateTime fin, String? obs})>(
       context: context,
       isScrollControlled: true,
       builder: (sheetCtx) => StatefulBuilder(
@@ -326,6 +327,12 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
             setSheet(() => duracion = res.horas);
           }
 
+          Future<void> editarObs() async {
+            final res = await pedirObsAlbaran(ctx,
+                inicial: obs, avisoCliente: false, titulo: 'Observaciones', accion: 'Aceptar');
+            if (res != null) setSheet(() => obs = res);
+          }
+
           final fin = (inicio != null && duracion != null)
               ? inicio!.add(Duration(minutes: (duracion! * 60).round()))
               : null;
@@ -347,11 +354,22 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
                       child: Text('Fin: ${_diaHora(fin)}',
                           style: const TextStyle(fontWeight: FontWeight.w600)),
                     ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.notes),
+                    title: Text(obs.isEmpty ? 'Añadir observaciones' : 'Observaciones'),
+                    subtitle: obs.isEmpty
+                        ? null
+                        : Text(obs, maxLines: 2, overflow: TextOverflow.ellipsis),
+                    trailing: Icon(obs.isEmpty ? Icons.add : Icons.edit),
+                    onTap: editarObs,
+                  ),
                   const SizedBox(height: 12),
                   FilledButton(
                     style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
                     onPressed: fin != null
-                        ? () => Navigator.pop(sheetCtx, (inicio: inicio!, fin: fin))
+                        ? () => Navigator.pop(sheetCtx,
+                            (inicio: inicio!, fin: fin, obs: obs.isEmpty ? null : obs))
                         : null,
                     child: Text(t.completada ? 'Guardar' : 'Completar'),
                   ),
@@ -367,6 +385,7 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
       ),
     );
   }
+
 
 
   Widget _selector(BuildContext ctx, String label, DateTime? valor, VoidCallback onTap) => ListTile(
@@ -404,7 +423,7 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
     final text = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Añadir comentario'),
+        title: const Text('Comentario para oficina'),
         content: TextField(
           controller: ctrl,
           maxLines: 4,

@@ -5,6 +5,7 @@ import '../task_models.dart';
 
 /// Pinta `resumen_albaran` tal como lo resuelve el servidor (CONTRATO §4.4).
 /// No recalcula nada. Nunca muestra la cifra del servicio mínimo.
+class ResumenAlbaranView extends StatelessWidget {
   const ResumenAlbaranView({super.key, required this.resumen, this.mostrarObs = true,
       this.mostrarObsConductor = true});
 
@@ -12,6 +13,7 @@ import '../task_models.dart';
   final bool mostrarObs;
   /// v3.12: false cuando la pantalla las pinta aparte (editables, [ObsAlbaranTile]).
   final bool mostrarObsConductor;
+
   static String _two(int n) => n.toString().padLeft(2, '0');
   static String _hm(DateTime d) {
     final l = d.toLocal();
@@ -54,6 +56,8 @@ import '../task_models.dart';
         else if (r.horas != null)
           _fila('Horas', fmtHoras(r.horas!)),
         if (mostrarObs && mostrarObsConductor && r.obsConductor != null)
+          _obs('Observaciones del conductor', r.obsConductor!),
+        if (mostrarObs && r.obsCliente != null)
           _obs('Observaciones del cliente', r.obsCliente!),
       ],
     );
