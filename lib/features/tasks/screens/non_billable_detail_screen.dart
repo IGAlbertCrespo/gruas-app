@@ -7,6 +7,7 @@ import '../../../shared/horas.dart';
 import '../../../shared/horas_totales_dialog.dart';
 import '../../../shared/selector_hora.dart';
 import '../../../shared/location.dart';
+import '../../../shared/observaciones_dialog.dart';
 import '../../../shared/pausa_dialog.dart' show fmtHoras;
 import '../../../shared/widgets/upgrade_required.dart';
 import '../../../shared/formulario_tiempo.dart';
@@ -15,6 +16,7 @@ import '../tasks_providers.dart';
 import '../../auth/session_controller.dart';
 import '../../auth/session_models.dart';
 import 'jornada_aviso.dart';
+import 'observaciones_albaran.dart';
 
 
 String _two(int n) => n.toString().padLeft(2, '0');
@@ -49,7 +51,7 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
           if (!widget.readOnly && t != null)
             IconButton(
               icon: const Icon(Icons.add_comment),
-              tooltip: 'Añadir comentario',
+              tooltip: 'Comentario para oficina',
               onPressed: _busy ? null : _addComment,
             ),
         ],
@@ -114,6 +116,15 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
         const SizedBox(height: 12),
         _bloque('Notas del chófer', t.notasChofer!.trim()),
       ],
+      // v3.12 §4.9: observaciones (en no facturables no las ve ningún cliente).
+      const SizedBox(height: 12),
+      ObsAlbaranTile(
+        texto: t.obsAlbaran,
+        onEditar: (!widget.readOnly && t.obsEditable)
+            ? () => editarObsAlbaran(context, ref,
+                taskId: t.id, inicial: t.obsAlbaran, avisoCliente: false)
+            : null,
+      ),
     ];
   }
 
@@ -186,8 +197,9 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
       if (!mounted) return;
       final res = await conConfirmacionDuracion(
         context,
-        (confirmar) => ref.read(tasksRepoProvider).complete(t.id,
-            inicio: v.inicio, fin: v.fin, confirmar: confirmar, lat: lat, lng: lng),
+            (confirmar) => ref.read(tasksRepoProvider).complete(t.id,
+            inicio: v.inicio, fin: v.fin, obsAlbaran: v.obs,
+            confirmar: confirmar, lat: lat, lng: lng),
       );
       if (res == null) return; // eligió revisar: el servidor no ha guardado nada
       ref.invalidate(taskDetailProvider(t.id));
@@ -224,6 +236,8 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
       horasPrevistas: horas,
       titulo: t.completada ? 'Modificar horas' : 'Completar tarea',
       subtitulo: 'Día ${fmtDia(dia)}',
+      conObservaciones: true, // v3.12: enlace opcional
+      obsInicial: t.obsAlbaran,
     );
     if (tiempo == null || !mounted) return;
 
@@ -275,9 +289,9 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
   /// - Fin: "¿Cuánto duró?" en horas desde el inicio. Máximo = tiempo
   ///   transcurrido, así el fin nunca es futuro.
   /// Al modificar, se precargan los valores ya informados.
-  Future<({DateTime inicio, DateTime fin})?> _pedirInicioFin(TaskDetail t) {
+  Future<({DateTime inicio, DateTime fin, String? obs})?> _pedirInicioFin(TaskDetail t) {
     DateTime? inicio = t.completada ? t.aperturaInformada : null;
-    double? duracion = (t.completada && t.aperturaInformada != null && t.cierreInformada != null)
+    var obs = (t.obsAlbaran ?? '').trim(); // v3.12: opcional  double? duracion = (t.completada && t.aperturaInformada != null && t.cierreInformada != null)
         ? round30(horasEntre(t.aperturaInformada!, t.cierreInformada!))
         : null;
     final desde = t.fechaServicio ?? DateTime.now(); // sin fecha programada: solo hoy

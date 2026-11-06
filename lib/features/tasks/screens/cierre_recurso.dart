@@ -6,6 +6,7 @@ import '../../../shared/duracion_sospechosa.dart';
 import '../../../shared/formulario_tiempo.dart';
 import '../../../shared/horas.dart';
 import '../../../shared/location.dart';
+import '../../../shared/observaciones_dialog.dart';
 import '../../auth/session_controller.dart';
 import '../../auth/session_models.dart';
 import '../task_models.dart';
@@ -67,7 +68,15 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
       if (resp == null || !context.mounted) return false;
       if (resp == _RespIncidencia.revisar) continue;
       if (resp == _RespIncidencia.si) {
-        obs = await _pedirObsConductor(context, inicial: r.resumenAlbaran?.obsConductor);
+        // v3.12: precargadas con las ya escritas (el resumen es null antes del cierre).
+        obs = await pedirObsAlbaran(
+          context,
+          inicial: r.obsAlbaran ?? r.resumenAlbaran?.obsConductor,
+          obligatoria: true,
+          titulo: 'Incidencia',
+          accion: 'Continuar',
+          hint: 'Describe la incidencia…',
+        );
         if (obs == null || !context.mounted) return false;
         incidencia = true;
       }
@@ -139,67 +148,4 @@ Future<_RespIncidencia?> _preguntarIncidencia(BuildContext context) =>
         ],
       ),
     );
-
-/// Observaciones del conductor obligatorias (un "." vale). null = cancelar.
-Future<String?> _pedirObsConductor(BuildContext context, {String? inicial}) =>
-    showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _ObsConductorDialog(inicial: inicial),
-    );
-
-class _ObsConductorDialog extends StatefulWidget {
-  const _ObsConductorDialog({this.inicial});
-  final String? inicial;
-  @override
-  State<_ObsConductorDialog> createState() => _ObsConductorDialogState();
-}
-
-class _ObsConductorDialogState extends State<_ObsConductorDialog> {
-  late final _ctrl = TextEditingController(text: widget.inicial ?? '');
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl.addListener(() => setState(() {}));
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  void _close([String? value]) {
-    FocusScope.of(context).unfocus(); // suelta el teclado antes del pop
-    Navigator.of(context).pop(value);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final texto = _ctrl.text.trim();
-    return AlertDialog(
-      title: const Text('Incidencia'),
-      content: TextField(
-        controller: _ctrl,
-        minLines: 3,
-        maxLines: 6,
-        autofocus: true,
-        textCapitalization: TextCapitalization.sentences,
-        decoration: const InputDecoration(
-          labelText: 'Observaciones del conductor',
-          hintText: 'Describe la incidencia…',
-          border: OutlineInputBorder(),
-        ),
-      ),
-      actions: [
-        TextButton(onPressed: () => _close(), child: const Text('Cancelar')),
-        FilledButton(
-          onPressed: texto.isEmpty ? null : () => _close(texto),
-          child: const Text('Continuar'),
-        ),
-      ],
-    );
-  }
-}
 

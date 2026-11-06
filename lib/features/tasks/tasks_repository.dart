@@ -140,17 +140,20 @@ class TasksRepository {
   /// Completa una NO FACTURABLE con inicio/fin informados. Repetible en el día.
   /// El servidor aplica la regla de medianoche y el umbral de 16 h, y puede
   /// abrir la jornada con el inicio si ese día no hay ningún fichaje.
-  Future<({TaskDetail task, JornadaStart? jornada})> complete(
+    Future<({TaskDetail task, JornadaStart? jornada})> complete(
     int id, {
     required DateTime inicio,
     required DateTime fin,
+    String? obsAlbaran,
     bool confirmar = false,
     double? lat,
     double? lng,
   }) async {
+    final obs = obsAlbaran?.trim();
     final res = await api.postJson('/tasks/$id/complete', data: {
       'inicio': _fmtUtc(inicio),
       'fin': _fmtUtc(fin),
+      if (obs != null && obs.isNotEmpty) 'obs_albaran': obs, // v3.12
       if (confirmar) 'confirmar': true,
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
@@ -173,9 +176,11 @@ class TasksRepository {
     double? lng,
   }) async {
     final dia = '${fecha.year.toString().padLeft(4, '0')}-${_two(fecha.month)}-${_two(fecha.day)}';
+        final obs = tiempo.obs?.trim();
     final res = await api.postJson('/tasks/$id/complete', data: {
       'fecha': dia,
       ..._tiempoBody(tiempo, enviarInicio: true),
+      if (obs != null && obs.isNotEmpty) 'obs_albaran': obs, // v3.12
       if (confirmar) 'confirmar': true,
       if (lat != null) 'lat': lat,
       if (lng != null) 'lng': lng,
@@ -289,9 +294,17 @@ class TasksRepository {
     return TaskDetail.fromJson(res);
   }
 
+   /// "Comentario para oficina" (§4.9.1): se acumula en x_notas_chofer. Interno.
   Future<TaskDetail> addNote(int id, String text) async {
     await api.postJson('/tasks/$id/note', data: {'text': text});
     return detail(id);
+  }
+
+  /// v3.12 §4.9.2 — observaciones del albarán (las ve el cliente). Vacío = borrar.
+  Future<TaskDetail> setObservaciones(int id, String texto) async {
+    final res = await api.postJson('/tasks/$id/observaciones',
+        data: {'obs_albaran': texto.trim()});
+    return TaskDetail.fromJson(res);
   }
 
   Future<void> reopen(int id) async {

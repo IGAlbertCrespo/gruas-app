@@ -15,6 +15,7 @@ import '../../../shared/horas.dart' show fmtDia;
 import 'cierre_recurso.dart';
 import 'conceptos_section.dart';
 import 'enlace_firma.dart';
+import 'observaciones_albaran.dart';
 import 'resumen_albaran_view.dart';
 
 /// Firmantes de la obra de la tarea (CONTRATO §6.1). Requiere conexión.
@@ -611,10 +612,19 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
             Expanded(child: Text(r.recurso, style: const TextStyle(fontWeight: FontWeight.w600))),
             if (editar) const Icon(Icons.edit, size: 16, color: Colors.black38),
           ]),
-          if (res != null)
-            ResumenAlbaranView(resumen: res)
+                    if (res != null)
+            ResumenAlbaranView(resumen: res, mostrarObsConductor: !r.obsEditable)
           else
             Text(r.cerrada ? 'Cerrado' : 'Sin cerrar', style: const TextStyle(color: Colors.black54)),
+          // v3.12 §4.9: último momento para añadir o corregir lo que verá el cliente.
+          if (r.obsEditable)
+            ObsAlbaranTile(
+              texto: r.obsAlbaran,
+              onEditar: _busy
+                  ? null
+                  : () => editarObsAlbaran(context, ref,
+                      taskId: r.id, inicial: r.obsAlbaran, madreId: _id),
+            ),
         ]),
       ),
     );

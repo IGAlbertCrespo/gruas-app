@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../features/auth/session_models.dart';
 import 'horas.dart';
+import 'observaciones_dialog.dart';
 import 'pausa_dialog.dart' show fmtHoras;
 
 // v3.10 — Pantalla única para declarar el tiempo al terminar (CONTRATO §4.1,
@@ -29,6 +30,7 @@ class TiempoDeclarado {
     this.horas,
     this.comidaMin = 0,
     this.comidaInicio,
+    this.obs,
   });
 
   final FormatoCierre formato;
@@ -50,6 +52,10 @@ class TiempoDeclarado {
 
   /// Inicio de la comida (solo `inicio_fin` con comida).
   final DateTime? comidaInicio;
+
+  /// v3.12: observaciones del albarán escritas en el formulario (solo si se
+  /// abrió con `conObservaciones`). null o vacío = no se envían.
+  final String? obs;
 
   double get comidaHoras => comidaMin / 60.0;
 
@@ -78,6 +84,8 @@ Future<TiempoDeclarado?> pedirTiempo(
   double? horasPrevistas,
   String titulo = 'Tiempo del servicio',
   String? subtitulo,
+  bool conObservaciones = false,
+  String? obsInicial,
 }) {
   assert(formatos.isNotEmpty);
   return Navigator.of(context).push<TiempoDeclarado>(
@@ -92,6 +100,8 @@ Future<TiempoDeclarado?> pedirTiempo(
         horasPrevistas: horasPrevistas,
         titulo: titulo,
         subtitulo: subtitulo,
+        conObservaciones: conObservaciones,
+        obsInicial: obsInicial,
       ),
     ),
   );
@@ -107,6 +117,8 @@ class _FormularioTiempo extends StatefulWidget {
     this.horasPrevistas,
     required this.titulo,
     this.subtitulo,
+    this.conObservaciones = false,
+    this.obsInicial,
   });
 
   final List<FormatoCierre> formatos;
@@ -117,6 +129,8 @@ class _FormularioTiempo extends StatefulWidget {
   final double? horasPrevistas;
   final String titulo;
   final String? subtitulo;
+  final bool conObservaciones;
+  final String? obsInicial;
 
   @override
   State<_FormularioTiempo> createState() => _FormularioTiempoState();
@@ -135,7 +149,7 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
   late int _comidaMin = widget.cfg.comidaDefectoMin;
   DateTime? _comidaInicio;
   bool _comidaInicioManual = false;
-
+  late String _obs = (widget.obsInicial ?? '').trim();
   int get _pasoMin => widget.cfg.tiempo.pasoMin;
   double get _paso => widget.cfg.tiempo.pasoHoras;
   ReglaComida get _regla => reglaComidaDe(widget.cfg.comida);
@@ -312,7 +326,7 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
     });
   }
 
-  void _continuar() {
+   void _continuar() {
     final ini = _formato.pideInicio ? _inicio : null;
     final orig = _inicioOriginal;
     final c = _comidaEfectiva;
@@ -325,7 +339,15 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
       horas: esIF ? null : _horas,
       comidaMin: c,
       comidaInicio: esIF && c > 0 ? _comidaInicio : null,
+      obs: widget.conObservaciones && _obs.isNotEmpty ? _obs : null,
     ));
+  }
+
+  /// v3.12: observaciones opcionales (no facturables: no las ve ningún cliente).
+  Future<void> _editarObs() async {
+    final t = await pedirObsAlbaran(context,
+        inicial: _obs, avisoCliente: false, titulo: 'Observaciones', accion: 'Aceptar');
+    if (t != null && mounted) setState(() => _obs = t);
   }
 
   // ---------------------------------------------------------------------- UI
@@ -525,6 +547,19 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
                   onTap: ini == null ? null : _elegirHoraComida,
                 ),
             ],
+
+            // Observaciones (v3.12, opcionales)
+            if (widget.conObservaciones)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.notes),
+                title: Text(_obs.isEmpty ? 'Añadir observaciones' : 'Observaciones'),
+                subtitle: _obs.isEmpty
+                    ? null
+                    : Text(_obs, maxLines: 3, overflow: TextOverflow.ellipsis),
+                trailing: Icon(_obs.isEmpty ? Icons.add : Icons.edit),
+                onTap: _editarObs,
+              ),
           ],
         ),
       ),

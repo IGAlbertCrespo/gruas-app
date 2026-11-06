@@ -17,6 +17,7 @@ import 'conceptos_section.dart';
 import 'cierre_recurso.dart';
 import 'resumen_albaran_view.dart';
 import 'enlace_firma.dart';
+import 'observaciones_albaran.dart';
 
 
 class TaskDetailScreen extends ConsumerStatefulWidget {
@@ -104,7 +105,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     _addComment();
                   },
                   icon: const Icon(Icons.add_comment),
-                  label: const Text('Añadir comentario'),
+                  label: const Text('Comentario para oficina')
                 ),
               TextButton(onPressed: () => Navigator.pop(context),
                   child: const Text('Cerrar')),
@@ -119,12 +120,15 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       context: context,
       builder: (_) =>
           AlertDialog(
-            title: const Text('Añadir comentario'),
+                        title: const Text('Comentario para oficina'),
             content: TextField(
               controller: ctrl,
               maxLines: 4,
               autofocus: true,
-              decoration: const InputDecoration(hintText: 'Tu comentario…'),
+              decoration: const InputDecoration(
+                hintText: 'Tu comentario…',
+                helperText: 'Lo lee la oficina. No sale en el albarán.',
+              ),
             ),
             actions: [
               TextButton(onPressed: () => Navigator.pop(context),
@@ -319,12 +323,18 @@ class _Body extends ConsumerWidget {            // ← era StatelessWidget
         _Section(icon: Icons.assignment_turned_in, title: 'Hoja de trabajo', color: scheme.primary, rows: [
           if (mostrarReales)
             _kv('Horas reales', task.worksheet.horasReales.toStringAsFixed(2)),
-          if (task.resumenAlbaran != null)
-            ResumenAlbaranView(resumen: task.resumenAlbaran!)
-          else ...[
-            if ((task.worksheet.obsAlbaran ?? '').isNotEmpty) _kv('Obs. conductor', task.worksheet.obsAlbaran!),
-            if ((task.worksheet.obsCliente ?? '').isNotEmpty) _kv('Obs. cliente', task.worksheet.obsCliente!),
-          ],
+                    if (task.resumenAlbaran != null)
+            ResumenAlbaranView(resumen: task.resumenAlbaran!, mostrarObsConductor: false)
+          else if ((task.worksheet.obsCliente ?? '').isNotEmpty)
+            _kv('Obs. cliente', task.worksheet.obsCliente!),
+          // v3.12 §4.9: observaciones del albarán, editables mientras se pueda.
+          ObsAlbaranTile(
+            texto: task.obsAlbaran ?? task.worksheet.obsAlbaran,
+            onEditar: task.obsEditable
+                ? () => editarObsAlbaran(context, ref,
+                    taskId: task.id, inicial: task.obsAlbaran)
+                : null,
+          ),
           _kv('Firma', task.worksheet.hasSignature ? '✔ recogida' : '— pendiente'),
         ]),
         const SizedBox(height: 80),

@@ -40,6 +40,9 @@ class TaskSummary {
   final SolicitudFirma? solicitudFirma;
   /// v3.10 §4.7: valor inicial del selector de horas (o null).
   final double? horasPrevistas;
+    /// v3.12 §4.9: observaciones del albarán del recurso y si el conductor las puede editar.
+  final String? obsAlbaran;
+  final bool obsEditable;
   /// v3.11: descripción de la actividad (tareas creadas por el conductor); null en el resto.
   final String? actividad;
 
@@ -64,7 +67,7 @@ class TaskSummary {
     this.tipoInterna,
     this.faltaFirma = false,
     this.solicitudFirma,
-    this.horasPrevistas,
+    this.horasPrevistas, this.obsAlbaran, this.obsEditable = false,
     this.actividad,
   });
   bool get esNoFacturable => tipo == 'no_facturable';
@@ -107,6 +110,8 @@ class TaskSummary {
             ? SolicitudFirma.fromJson((j['firma'] as Map)['solicitud'])
             : null,
         horasPrevistas: (j['horas_previstas'] as num?)?.toDouble(),
+        obsAlbaran: j['obs_albaran']?.toString(),
+        obsEditable: j['obs_editable'] == true,
         actividad: _texto(j['actividad']),
       );
 }
@@ -178,6 +183,9 @@ class Recurso {
   final bool aplicarMinimo;
   /// v3 (propuesta contrato: resumen_albaran por recurso).
   final ResumenAlbaran? resumenAlbaran;
+  // --- v3.12 §4.9: en todas las tareas (las no facturables no llevan worksheet) ---
+  final String? obsAlbaran;
+  final bool obsEditable;
   /// v3.10 §4.7: horas previstas del recurso (o null).
   final double? horasPrevistas;
 
@@ -187,6 +195,8 @@ class Recurso {
     required this.hayTramoAbierto, required this.horasFacturar,
     required this.servicioMinimo, required this.incidencia,
     this.aperturaInformada, required this.aplicarMinimo, this.resumenAlbaran,
+    this.obsAlbaran,
+    this.obsEditable = false,
     this.horasPrevistas,
   });
 
@@ -204,6 +214,8 @@ class Recurso {
         aperturaInformada: parseOdooDt(j['apertura_informada']?.toString()),
         aplicarMinimo: j['aplicar_minimo'] == true,
         resumenAlbaran: ResumenAlbaran.fromJson(j['resumen_albaran']),
+        obsAlbaran: j['obs_albaran']?.toString(),
+        obsEditable: j['obs_editable'] == true,
         horasPrevistas: (j['horas_previstas'] as num?)?.toDouble(),
       );
 }
