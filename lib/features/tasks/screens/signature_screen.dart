@@ -612,7 +612,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
             Expanded(child: Text(r.recurso, style: const TextStyle(fontWeight: FontWeight.w600))),
             if (editar) const Icon(Icons.edit, size: 16, color: Colors.black38),
           ]),
-                    if (res != null)
+          if (res != null)
             ResumenAlbaranView(resumen: res, mostrarObsConductor: !r.obsEditable)
           else
             Text(r.cerrada ? 'Cerrado' : 'Sin cerrar', style: const TextStyle(color: Colors.black54)),

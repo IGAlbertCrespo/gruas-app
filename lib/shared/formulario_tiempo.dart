@@ -86,6 +86,7 @@ Future<TiempoDeclarado?> pedirTiempo(
   String? subtitulo,
   bool conObservaciones = false,
   String? obsInicial,
+  bool avisoCliente = false,
 }) {
   assert(formatos.isNotEmpty);
   return Navigator.of(context).push<TiempoDeclarado>(
@@ -102,6 +103,7 @@ Future<TiempoDeclarado?> pedirTiempo(
         subtitulo: subtitulo,
         conObservaciones: conObservaciones,
         obsInicial: obsInicial,
+        avisoCliente: avisoCliente,
       ),
     ),
   );
@@ -119,6 +121,7 @@ class _FormularioTiempo extends StatefulWidget {
     this.subtitulo,
     this.conObservaciones = false,
     this.obsInicial,
+    this.avisoCliente = false,
   });
 
   final List<FormatoCierre> formatos;
@@ -131,6 +134,7 @@ class _FormularioTiempo extends StatefulWidget {
   final String? subtitulo;
   final bool conObservaciones;
   final String? obsInicial;
+  final bool avisoCliente;
 
   @override
   State<_FormularioTiempo> createState() => _FormularioTiempoState();
@@ -150,6 +154,7 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
   DateTime? _comidaInicio;
   bool _comidaInicioManual = false;
   late String _obs = (widget.obsInicial ?? '').trim();
+
   int get _pasoMin => widget.cfg.tiempo.pasoMin;
   double get _paso => widget.cfg.tiempo.pasoHoras;
   ReglaComida get _regla => reglaComidaDe(widget.cfg.comida);
@@ -326,7 +331,7 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
     });
   }
 
-   void _continuar() {
+  void _continuar() {
     final ini = _formato.pideInicio ? _inicio : null;
     final orig = _inicioOriginal;
     final c = _comidaEfectiva;
@@ -343,10 +348,11 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
     ));
   }
 
-  /// v3.12: observaciones opcionales (no facturables: no las ve ningún cliente).
+  /// v3.12: observaciones opcionales. En facturables las ve el cliente.
   Future<void> _editarObs() async {
     final t = await pedirObsAlbaran(context,
-        inicial: _obs, avisoCliente: false, titulo: 'Observaciones', accion: 'Aceptar');
+        inicial: _obs, avisoCliente: widget.avisoCliente, titulo: 'Observaciones',
+        accion: 'Aceptar');
     if (t != null && mounted) setState(() => _obs = t);
   }
 
@@ -450,11 +456,25 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
     final ci = _comidaInicio;
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.titulo)),
+      // Continuar arriba: el teclado nunca lo tapa. Cancelar = la X del diálogo.
+      appBar: AppBar(
+        title: Text(widget.titulo),
+        actions: [
+          TextButton(
+            onPressed: error == null ? _continuar : null,
+            child: const Text('Continuar'),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           children: [
+            if (error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(error, style: const TextStyle(color: Colors.red)),
+              ),
             if (widget.subtitulo != null)
               Text(widget.subtitulo!, style: const TextStyle(color: Colors.black54)),
             if (widget.formatos.length > 1) ...[
@@ -561,39 +581,6 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
                 onTap: _editarObs,
               ),
           ],
-        ),
-      ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (error != null)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(error,
-                      textAlign: TextAlign.center, style: const TextStyle(color: Colors.red)),
-                ),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Cancelar'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: error == null ? _continuar : null,
-                      child: const Text('Continuar'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
         ),
       ),
     );

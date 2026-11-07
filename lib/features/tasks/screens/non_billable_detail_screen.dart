@@ -112,10 +112,17 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
         const SizedBox(height: 12),
         _bloque('Descripción', t.descripcionServicio!.trim()),
       ],
-      if ((t.notasChofer ?? '').trim().isNotEmpty) ...[
-        const SizedBox(height: 12),
-        _bloque('Notas del chófer', t.notasChofer!.trim()),
-      ],
+      // v3.12: las notas (descripción de Tráfico + comentarios) en un enlace.
+      if ((t.notasChofer ?? '').trim().isNotEmpty)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            style: TextButton.styleFrom(padding: EdgeInsets.zero),
+            onPressed: () => _verNotas(t.notasChofer!.trim()),
+            icon: const Icon(Icons.description_outlined, size: 18),
+            label: const Text('Ver notas del chófer'),
+          ),
+        ),
       // v3.12 §4.9: observaciones (en no facturables no las ve ningún cliente).
       const SizedBox(height: 12),
       ObsAlbaranTile(
@@ -146,6 +153,33 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
           SizedBox(width: 80, child: Text(label, style: const TextStyle(color: Colors.black54))),
           Expanded(child: Text(value, style: const TextStyle(fontWeight: FontWeight.w500))),
         ]),
+      );
+
+  /// v3.12: texto completo de las notas del chófer en una hoja desplazable.
+  void _verNotas(String notas) => showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (ctx) => SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.7),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Notas del chófer', style: Theme.of(ctx).textTheme.titleMedium),
+                  const SizedBox(height: 8),
+                  Flexible(child: SingleChildScrollView(child: SelectableText(notas))),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Cerrar'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       );
 
   Widget _bloque(String titulo, String texto) => Card(
@@ -197,7 +231,7 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
       if (!mounted) return;
       final res = await conConfirmacionDuracion(
         context,
-            (confirmar) => ref.read(tasksRepoProvider).complete(t.id,
+        (confirmar) => ref.read(tasksRepoProvider).complete(t.id,
             inicio: v.inicio, fin: v.fin, obsAlbaran: v.obs,
             confirmar: confirmar, lat: lat, lng: lng),
       );
@@ -284,7 +318,7 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
   }
 
 
-    /// Hoja de inicio/duración (v3).
+  /// Hoja de inicio/duración (v3).
   /// - Inicio entre el día programado y hoy (lo normal, hoy).
   /// - Fin: "¿Cuánto duró?" en horas desde el inicio. Máximo = tiempo
   ///   transcurrido, así el fin nunca es futuro.
@@ -385,7 +419,6 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
       ),
     );
   }
-
 
 
   Widget _selector(BuildContext ctx, String label, DateTime? valor, VoidCallback onTap) => ListTile(

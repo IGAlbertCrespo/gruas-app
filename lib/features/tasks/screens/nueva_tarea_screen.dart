@@ -47,7 +47,6 @@ class _NuevaTareaScreenState extends ConsumerState<NuevaTareaScreen> {
   VehiculoApp? _vehiculo;
   late DateTime _dia = soloDia(DateTime.now());
   TiempoDeclarado? _tiempo;
-  final _obs = TextEditingController();
   bool _enviando = false;
 
   SessionConfig get _cfg =>
@@ -57,12 +56,6 @@ class _NuevaTareaScreenState extends ConsumerState<NuevaTareaScreen> {
   void initState() {
     super.initState();
     _cargar();
-  }
-
-  @override
-  void dispose() {
-    _obs.dispose();
-    super.dispose();
   }
 
   // ------------------------------------------------------------------- datos
@@ -195,6 +188,8 @@ class _NuevaTareaScreenState extends ConsumerState<NuevaTareaScreen> {
         if (_actividad != null) _actividad!.descripcion,
         'Día ${fmtDia(_dia)}',
       ].join(' · '),
+      conObservaciones: true, // v3.12: observaciones en el formulario de horas
+      obsInicial: _tiempo?.obs,
     );
     if (t != null && mounted) setState(() => _tiempo = t);
   }
@@ -213,7 +208,7 @@ class _NuevaTareaScreenState extends ConsumerState<NuevaTareaScreen> {
               vehicleId: veh.id,
               fecha: _dia,
               tiempo: tiempo,
-              obs: _obs.text,
+              obs: tiempo.obs ?? '',
               confirmar: confirmar,
               lat: lat,
               lng: lng,
@@ -378,22 +373,12 @@ class _NuevaTareaScreenState extends ConsumerState<NuevaTareaScreen> {
           ),
           _seccion('Día'),
           _selectorDia(),
-          _seccion('Tiempo'),
+          _seccion('Tiempo y observaciones'),
           _campo(
             texto: tiempo == null ? 'Indicar…' : _resumenTiempo(tiempo),
+            subtexto: tiempo?.obs, // v3.12: se escriben en el formulario de horas
             vacio: tiempo == null,
             onTap: _elegirTiempo,
-          ),
-          _seccion('Observaciones (opcional)'),
-          TextField(
-            controller: _obs,
-            minLines: 2,
-            maxLines: 5,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(
-              hintText: 'Qué has hecho',
-              border: OutlineInputBorder(),
-            ),
           ),
         ],
       ),
@@ -404,33 +389,23 @@ class _NuevaTareaScreenState extends ConsumerState<NuevaTareaScreen> {
   Widget build(BuildContext context) {
     final listo = _actividad != null && _vehiculo != null && _tiempo != null && !_enviando;
     return Scaffold(
-      appBar: AppBar(title: const Text('Nueva tarea')),
-      body: SafeArea(child: _cuerpo()),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-          child: Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _enviando ? null : () => Navigator.of(context).pop(),
-                  child: const Text('Cancelar'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
+      // Guardar arriba: el teclado nunca lo tapa. Cancelar = la flecha atrás.
+      appBar: AppBar(
+        title: const Text('Nueva tarea'),
+        actions: [
+          _enviando
+              ? const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: SizedBox(
+                      width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                )
+              : TextButton(
                   onPressed: listo ? _guardar : null,
-                  child: _enviando
-                      ? const SizedBox(
-                          width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Text('Guardar'),
+                  child: const Text('Guardar'),
                 ),
-              ),
-            ],
-          ),
-        ),
+        ],
       ),
+      body: SafeArea(child: _cuerpo()),
     );
   }
 }

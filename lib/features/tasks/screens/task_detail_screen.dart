@@ -105,7 +105,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
                     _addComment();
                   },
                   icon: const Icon(Icons.add_comment),
-                  label: const Text('Comentario para oficina')
+                  label: const Text('Comentario para oficina'),
                 ),
               TextButton(onPressed: () => Navigator.pop(context),
                   child: const Text('Cerrar')),
@@ -120,7 +120,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       context: context,
       builder: (_) =>
           AlertDialog(
-                        title: const Text('Comentario para oficina'),
+            title: const Text('Comentario para oficina'),
             content: TextField(
               controller: ctrl,
               maxLines: 4,
@@ -323,7 +323,7 @@ class _Body extends ConsumerWidget {            // ← era StatelessWidget
         _Section(icon: Icons.assignment_turned_in, title: 'Hoja de trabajo', color: scheme.primary, rows: [
           if (mostrarReales)
             _kv('Horas reales', task.worksheet.horasReales.toStringAsFixed(2)),
-                    if (task.resumenAlbaran != null)
+          if (task.resumenAlbaran != null)
             ResumenAlbaranView(resumen: task.resumenAlbaran!, mostrarObsConductor: false)
           else if ((task.worksheet.obsCliente ?? '').isNotEmpty)
             _kv('Obs. cliente', task.worksheet.obsCliente!),
