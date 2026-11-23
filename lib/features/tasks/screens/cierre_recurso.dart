@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/network/api_exception.dart';
+import '../../../shared/accion_tarea.dart';
 import '../../../shared/duracion_sospechosa.dart';
 import '../../../shared/formulario_tiempo.dart';
 import '../../../shared/horas.dart';
 import '../../../shared/location.dart';
 import '../../../shared/observaciones_dialog.dart';
+import '../../../shared/widgets/upgrade_required.dart' show mostrarErrorAccion;
 import '../../auth/session_controller.dart';
 import '../../auth/session_models.dart';
 import '../task_models.dart';
@@ -27,9 +29,17 @@ import 'jornada_aviso.dart';
 /// `409 tarea_firmada` / `409 no_editable` (v3.3): se muestra el `detail`, se
 /// refresca la madre ([madreId]) y devuelve false. El resto de errores de API
 /// se propagan: los llamantes ya los muestran.
+///
+/// v3.13:
+/// - El formulario se abre con lo ya declarado ([Recurso.declarado]) al editar.
+/// - [alEnviar] se llama justo antes de la parte de red (tras el formulario y
+///   los diálogos), para que el llamante tape la pantalla con `EsperaRelax`.
+/// - La ubicación se pide en paralelo mientras se rellenan las horas (sin
+///   pedir permiso: si no lo hay, se pide como siempre al final).
 Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
-    {int? madreId}) async {
+    {int? madreId, VoidCallback? alEnviar}) async {
   final cfg = ref.read(sessionControllerProvider).profile?.config ?? SessionConfig.fallback;
+  final ubicacionPrevia = ubicacionSiHayPermiso();
   final regla = reglaComidaDe(cfg.comida);
   // Hora planificada (propuesta de inicio con solo horas): la del servicio en
   // pantalla. El conductor la puede cambiar; con formato "horas" la pone el servidor.
@@ -52,6 +62,7 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
       conObservaciones: true, // v3.12: observaciones siempre en el formulario de horas
       obsInicial: r.obsAlbaran,
       avisoCliente: true,
+      inicial: r.declarado, // v3.13: al editar, lo ya declarado
     );
     if (tiempo == null || !context.mounted) return false;
 
@@ -85,8 +96,11 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
         incidencia = true;
       }
     }
-
-    final (lat, lng) = await bestEffortLocation();
+    alEnviar?.call();
+    var (lat, lng) = await ubicacionPrevia;
+    if (lat == null) {
+      (lat, lng) = await bestEffortLocation(); // sin permiso concedido aún: se pide ahora
+    }
     if (!context.mounted) return false;
     final ({TaskDetail task, JornadaStart? jornada})? res;
     try {
@@ -125,29 +139,120 @@ Future<bool> cerrarRecursoDialog(BuildContext context, WidgetRef ref, Recurso r,
   }
 }
 
+// ---------------------------------------------------------------------------
+// v3.13 §4.9 — Borrar horas
+// ---------------------------------------------------------------------------
+
+/// "Borrar horas" solo existe con solo horas y sin control de jornada (a nivel
+/// de compañía): es el único caso sin apertura previa en que pueden quedar
+/// tareas de días anteriores a medias. El resto de condiciones (recurso propio,
+/// cerrado, no iniciado, tarea sin finalizar ni firmar) las mira el llamante.
+bool puedeBorrarHoras(SessionConfig? cfg) =>
+    (cfg?.soloHoras ?? false) && !(cfg?.controlJornada ?? false);
+
+/// Pregunta y borra las horas de [taskId] (recurso o no facturable).
+///
+/// 1. Confirmación.
+/// 2. Solo si hay [obs] (observaciones del albarán): pregunta explícita de si
+///    se borran también.
+/// 3. `POST /borrar-horas` ([alEnviar] justo antes, para la capa de espera).
+///
+/// Devuelve true si el servidor las borró. Errores `409` y sin conexión los
+/// trata [ejecutarAccionTarea]; el resto se muestran aquí.
+Future<bool> borrarHorasDialog(
+  BuildContext context,
+  WidgetRef ref, {
+  required int taskId,
+  required String nombre,
+  String? obs,
+  int? madreId,
+  VoidCallback? alEnviar,
+}) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Borrar horas'),
+      content: Text('¿Borrar las horas de $nombre?\n\nLa tarea volverá a «Para hacer».'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+        FilledButton(
+          style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+          onPressed: () => Navigator.pop(ctx, true),
+          child: const Text('Borrar'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return false;
+
+  var borrarObs = false;
+  final texto = (obs ?? '').trim();
+  if (texto.isNotEmpty) {
+    final r = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Observaciones del albarán'),
+        content: Text('¿Borrar también las observaciones del albarán?\n\n«$texto»'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Conservar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Borrar')),
+        ],
+      ),
+    );
+    if (r == null || !context.mounted) return false;
+    borrarObs = r;
+  }
+
+  alEnviar?.call();
+  try {
+    final res = await ejecutarAccionTarea(
+      context,
+      ref,
+      madreId ?? taskId,
+      () => ref.read(tasksRepoProvider).borrarHoras(taskId, borrarObs: borrarObs),
+    );
+    if (res == null) return false; // 409 / sin conexión: ya avisado y refrescado
+  } catch (e) {
+    if (context.mounted) await mostrarErrorAccion(context, e, prefijo: 'No se pudieron borrar: ');
+    return false;
+  }
+  // La comida declarada de ese recurso deja de contar para la jornada.
+  await ref.read(journeyLedgerProvider).setDeclared(taskId, 0);
+  ref.invalidate(taskDetailProvider(taskId));
+  if (madreId != null && madreId != taskId) ref.invalidate(taskDetailProvider(madreId));
+  ref.invalidate(tasksListProvider);
+  return true;
+}
+
 enum _RespIncidencia { revisar, no, si }
 
 /// Diálogo SIN cifras (regla de negocio 1: la APP nunca muestra el mínimo).
+/// Horas por debajo del mínimo. Lo habitual es que NO haya incidencia: la
+/// respuesta destacada (y con el foco) es "Sin incidencias" → servicio mínimo.
+/// "Hubo una incidencia" pide el motivo (obligatorio). Sin cifras (regla 1).
 Future<_RespIncidencia?> _preguntarIncidencia(BuildContext context) =>
     showDialog<_RespIncidencia>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('Servicio mínimo'),
-        content: const Text('Las horas indicadas no llegan al servicio mínimo. '
-            '¿Ha habido alguna incidencia en el servicio?'),
+        title: const Text('¿Todo normal en el servicio?'),
+        content: const Text('Las horas indicadas no llegan al mínimo del servicio. '
+            'Si no ha habido ninguna incidencia, se facturará el servicio mínimo.'),
+        actionsOverflowButtonSpacing: 4,
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, _RespIncidencia.revisar),
             child: const Text('Revisar horas'),
           ),
           OutlinedButton(
-            onPressed: () => Navigator.pop(ctx, _RespIncidencia.no),
-            child: const Text('No'),
+            onPressed: () => Navigator.pop(ctx, _RespIncidencia.si),
+            child: const Text('Hubo una incidencia'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(ctx, _RespIncidencia.si),
-            child: const Text('Sí'),
+            autofocus: true,
+            onPressed: () => Navigator.pop(ctx, _RespIncidencia.no),
+            child: const Text('Sin incidencias'),
           ),
         ],
       ),

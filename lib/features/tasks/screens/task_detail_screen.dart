@@ -5,6 +5,7 @@ import 'deca_section.dart';
 import 'jornada_aviso.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../shared/location.dart';
+import '../../../shared/widgets/espera_relax.dart';
 import '../../../shared/widgets/upgrade_required.dart';
 import '../../../shared/horas.dart';
 import '../../auth/session_controller.dart';
@@ -33,6 +34,21 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   bool _notesShown = false;
   bool _busy = false;
 
+  /// v3.13: capa de espera a pantalla completa mientras se guardan las horas.
+  bool _esperando = false;
+
+  void _esperar(bool v) {
+    if (mounted && _esperando != v) setState(() => _esperando = v);
+  }
+
+  /// v3.13: se pueden editar/borrar horas desde el detalle (tarea en Informado,
+  /// sin firmar ni pendiente de firma, y no en modo lectura).
+  bool _horasEditables(TaskDetail t) =>
+      !widget.readOnly &&
+      t.stage.alias == 'Informado' &&
+      !t.hasSignature &&
+      t.firma?.faltaFirma != true;
+
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(taskDetailProvider(widget.taskId));
@@ -49,7 +65,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
       }
     });
 
-    return Scaffold(
+    final pantalla = Scaffold(
       appBar: AppBar(
         title: const Text('Servicio'),
         actions: [
@@ -70,7 +86,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         e is ApiException && e.upgradeRequired
             ? UpgradeRequiredView(error: e)
             : Center(child: Text('$e')),
-        data: (t) => _Body(task: t),
+        data: (t) => _Body(task: t, horasEditables: _horasEditables(t), onEsperando: _esperar),
       ),
       bottomNavigationBar: widget.readOnly
           ? null
@@ -79,6 +95,12 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
         orElse: () => null,
       ),
     );
+
+    // v3.13: la capa tapa toda la pantalla (no se ve el detalle ni se pulsa nada).
+    return Stack(children: [
+      pantalla,
+      if (_esperando) const Positioned.fill(child: EsperaRelax()),
+    ]);
   }
 
   // ---------- Notas ----------
@@ -209,6 +231,7 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
   }
 
   Future<void> _finalizarTarea(TaskDetail t) async {
+    if (_busy) return; // v3.13: un segundo toque no hace nada
     // Guarda: sin "solo horas" no se finaliza una tarea que no se ha iniciado
     // (se mira 'iniciada', no 'pendientes', para no bloquear recursos ya cerrados).
     final soloHoras = ref
@@ -221,32 +244,46 @@ class _TaskDetailScreenState extends ConsumerState<TaskDetailScreen> {
           content: Text('Inicia la tarea antes de finalizarla.')));
       return;
     }
+    setState(() => _busy = true);
     try {
       // Solo horas: se piden las horas de cada recurso propio sin cerrar.
       final pendientes = t.recursos
           .where((r) => r.esMio && !r.cerrada && (soloHoras || r.iniciada))
           .toList();
       for (final r in pendientes) {
-        final ok = await cerrarRecursoDialog(context, ref, r, madreId: t.id);
+        final ok = await cerrarRecursoDialog(context, ref, r,
+            madreId: t.id, alEnviar: () => _esperar(true));
         if (!ok || !mounted) return;
       }
+      _esperar(true); // también si ya estaban todos cerrados
       ref.invalidate(taskDetailProvider(t.id));
       final fresh = await ref.read(tasksRepoProvider).detail(t.id);
       if (!mounted) return;
-      await Navigator.push(context,
+      final ruta = Navigator.push(context,
           MaterialPageRoute(builder: (_) => SignatureScreen(task: fresh)));
+      // La capa se quita cuando la firma ya tapa la pantalla (fin de la transición).
+      Future.delayed(const Duration(milliseconds: 400), () => _esperar(false));
+      await ruta;
       ref.invalidate(taskDetailProvider(t.id));
       ref.invalidate(tasksListProvider);
     } catch (e) {
+      _esperar(false);
       if (mounted) await mostrarErrorAccion(context, e);
+    } finally {
+      _esperar(false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 }
 
 // ============================ Cuerpo (presentación) ============================
 class _Body extends ConsumerWidget {            // ← era StatelessWidget
-  const _Body({required this.task});
+  const _Body({required this.task, this.horasEditables = false, this.onEsperando});
   final TaskDetail task;                          // ← SOLO task como campo. NADA de mostrarReales aquí.
+  /// v3.13: editar/borrar horas de los recursos cerrados (ver _horasEditables).
+  final bool horasEditables;
+  /// v3.13: muestra/quita la capa de espera de la pantalla.
+  final ValueChanged<bool>? onEsperando;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {   // ← añade WidgetRef ref
@@ -305,7 +342,12 @@ class _Body extends ConsumerWidget {            // ← era StatelessWidget
         ]),
         DecaSection(deca: task.deca, titulo: task.albaran ?? task.name),
         ConceptosSection(task: task),
-        _RecursosSection(madreId: task.id, recursos: task.recursos),
+        _RecursosSection(
+          madreId: task.id,
+          recursos: task.recursos,
+          horasEditables: horasEditables,
+          onEsperando: onEsperando,
+        ),
 
         if (task.accesorios.isNotEmpty)
           _Section(icon: Icons.handyman, title: 'Accesorios a cargar',
@@ -507,9 +549,17 @@ class _Tag extends StatelessWidget {
       );
 }
 class _RecursosSection extends ConsumerStatefulWidget {
-  const _RecursosSection({required this.madreId, required this.recursos});
+  const _RecursosSection({
+    required this.madreId,
+    required this.recursos,
+    this.horasEditables = false,
+    this.onEsperando,
+  });
   final int madreId;
   final List<Recurso> recursos;
+  /// v3.13: tarea en Informado, sin firmar ni pendiente de firma.
+  final bool horasEditables;
+  final ValueChanged<bool>? onEsperando;
   @override
   ConsumerState<_RecursosSection> createState() => _RecursosSectionState();
 
@@ -605,6 +655,76 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
           if (mounted) await mostrarErrorAccion(context, e, prefijo: 'No se pudo cerrar: ');
         }
       }
+
+  // ---------- v3.13: recurso cerrado con solo horas (sin apertura previa) ----------
+
+  /// Editar o borrar horas: recurso propio, cerrado, no iniciado en la APP, con
+  /// solo horas y la tarea aún editable.
+  bool _menuHoras(Recurso r) =>
+      widget.horasEditables && _soloHoras && r.esMio && r.cerrada && !r.iniciada;
+
+  Future<void> _editarHoras(Recurso r) async {
+    setState(() => _busy = true);
+    try {
+      final ok = await cerrarRecursoDialog(context, ref, r,
+          madreId: widget.madreId, alEnviar: () => widget.onEsperando?.call(true));
+      if (ok) {
+        ref.invalidate(taskDetailProvider(widget.madreId));
+        ref.invalidate(tasksListProvider);
+      }
+    } catch (e) {
+      widget.onEsperando?.call(false);
+      if (mounted) await mostrarErrorAccion(context, e, prefijo: 'No se pudo guardar: ');
+    } finally {
+      widget.onEsperando?.call(false);
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _borrarHoras(Recurso r) async {
+    setState(() => _busy = true);
+    try {
+      await borrarHorasDialog(
+        context,
+        ref,
+        taskId: r.id,
+        nombre: r.recurso,
+        obs: r.obsAlbaran ?? r.declarado?.obs,
+        madreId: widget.madreId,
+        alEnviar: () => widget.onEsperando?.call(true),
+      );
+    } finally {
+      widget.onEsperando?.call(false);
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Widget _menuCerrado(Recurso r) {
+    if (_busy) {
+      return const SizedBox(
+          width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2));
+    }
+    final borrar = puedeBorrarHoras(ref.read(sessionControllerProvider).profile?.config);
+    return PopupMenuButton<String>(
+      tooltip: 'Horas',
+      icon: const Icon(Icons.more_vert),
+      onSelected: (v) => v == 'borrar' ? _borrarHoras(r) : _editarHoras(r),
+      itemBuilder: (_) => [
+        const PopupMenuItem(
+          value: 'editar',
+          child: ListTile(leading: Icon(Icons.edit), title: Text('Editar horas')),
+        ),
+        if (borrar)
+          PopupMenuItem(
+            value: 'borrar',
+            child: ListTile(
+              leading: Icon(Icons.delete_outline, color: Colors.red.shade700),
+              title: Text('Borrar horas', style: TextStyle(color: Colors.red.shade700)),
+            ),
+          ),
+      ],
+    );
+  }
   @override
   Widget build(BuildContext context) {
     if (widget.recursos.isEmpty) return const SizedBox.shrink();
@@ -649,6 +769,7 @@ class _RecursosSectionState extends ConsumerState<_RecursosSection> {
           ]),
         ),
         if (mio && !r.cerrada) ..._botones(r),
+        if (_menuHoras(r)) _menuCerrado(r),
       ]),
     );
   }

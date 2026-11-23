@@ -15,6 +15,7 @@ import '../task_models.dart';
 import '../tasks_providers.dart';
 import '../../auth/session_controller.dart';
 import '../../auth/session_models.dart';
+import 'cierre_recurso.dart' show borrarHorasDialog, puedeBorrarHoras;
 import 'jornada_aviso.dart';
 import 'observaciones_albaran.dart';
 
@@ -71,18 +72,60 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
           : SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: FilledButton.icon(
-                  style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
-                  onPressed: _busy ? null : () => _completar(t),
-                  icon: _busy
-                      ? const SizedBox(
-                          width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                      : Icon(t.completada ? Icons.edit : Icons.check_circle),
-                  label: Text(t.completada ? 'Modificar horas' : 'Completar'),
-                ),
+                child: Row(children: [
+                  // v3.13 §4.9: borrar horas (solo horas, sin control de jornada,
+                  // sin apertura previa).
+                  if (_puedeBorrar(t)) ...[
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size.fromHeight(52),
+                          foregroundColor: Colors.red.shade700,
+                        ),
+                        onPressed: _busy ? null : () => _borrarHoras(t),
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Borrar horas'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                  ],
+                  Expanded(
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                      onPressed: _busy ? null : () => _completar(t),
+                      icon: _busy
+                          ? const SizedBox(
+                              width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                          : Icon(t.completada ? Icons.edit : Icons.check_circle),
+                      label: Text(t.completada ? 'Modificar horas' : 'Completar'),
+                    ),
+                  ),
+                ]),
               ),
             ),
     );
+  }
+
+  /// v3.13 §4.9: completada, sin iniciar en la APP, con solo horas y sin
+  /// control de jornada (compañía). El servidor vuelve a comprobarlo todo.
+  bool _puedeBorrar(TaskDetail t) =>
+      t.completada &&
+      !t.iniciada &&
+      puedeBorrarHoras(ref.read(sessionControllerProvider).profile?.config);
+
+  Future<void> _borrarHoras(TaskDetail t) async {
+    setState(() => _busy = true);
+    try {
+      await borrarHorasDialog(
+        context,
+        ref,
+        taskId: t.id,
+        nombre: 'esta tarea',
+        obs: t.obsAlbaran ?? t.declarado?.obs,
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   // ---------- Contenido ----------
@@ -272,6 +315,8 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
       subtitulo: 'Día ${fmtDia(dia)}',
       conObservaciones: true, // v3.12: enlace opcional
       obsInicial: t.obsAlbaran,
+      // v3.13: al modificar el mismo día, lo ya declarado (formato, horas y comida).
+      inicial: previa ? t.declarado : null,
     );
     if (tiempo == null || !mounted) return;
 
@@ -480,4 +525,4 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
       if (mounted) await mostrarErrorAccion(context, e);
     }
   }
-}
+}

@@ -165,6 +165,16 @@ class TasksRepository {
           : null,
     );
   }
+  /// v3.13 §4.9 [ONLINE] — borra las horas de un recurso cerrado (o de una no
+  /// facturable completada) declaradas sin apertura previa. Con [borrarObs]
+  /// también se borran las observaciones del albarán. Idempotente.
+  Future<TaskDetail> borrarHoras(int id, {bool borrarObs = false}) async {
+    final res = await api.postJson('/tasks/$id/borrar-horas', data: {
+      'borrar_obs': borrarObs,
+    });
+    return TaskDetail.fromJson(res);
+  }
+
    /// v3.10 §4.5.3 — no facturable con solo horas: día de ejecución + tiempo
   /// declarado con los formatos de la compañía. Tiempo real, sin redondeo.
   Future<({TaskDetail task, JornadaStart? jornada})> completeTiempo(

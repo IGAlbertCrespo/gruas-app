@@ -7,6 +7,7 @@ import 'package:signature/signature.dart';
 import '../../../core/network/api_exception.dart';
 import '../../../shared/accion_tarea.dart';
 import '../../../shared/location.dart';
+import '../../../shared/widgets/espera_relax.dart';
 import '../../../shared/widgets/upgrade_required.dart' show mostrarErrorAccion;
 import '../../auth/session_controller.dart';
 import '../task_models.dart';
@@ -60,6 +61,13 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
   late final _obs = TextEditingController(text: widget.task.worksheet.obsCliente ?? '');
   bool _busy = false;
 
+  /// v3.13: capa de espera a pantalla completa mientras se guardan las horas.
+  bool _esperando = false;
+
+  void _esperar(bool v) {
+    if (mounted && _esperando != v) setState(() => _esperando = v);
+  }
+
   /// Firmante elegido de la lista; null = "Otra persona" (o aún sin elegir).
   Firmante? _firmante;
 
@@ -101,12 +109,43 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
     ..showSnackBar(SnackBar(content: Text(texto)));
 
   Future<void> _editarRecurso(Recurso r) async {
+    if (_busy) return; // v3.13: no abrir dos ediciones
+    setState(() => _busy = true);
     try {
-      final ok = await cerrarRecursoDialog(context, ref, r, madreId: _id);
+      // v3.13: el formulario sale con lo ya declarado (r.declarado).
+      final ok = await cerrarRecursoDialog(context, ref, r,
+          madreId: _id, alEnviar: () => _esperar(true));
       if (ok) ref.invalidate(taskDetailProvider(_id));
     } catch (e) {
+      _esperar(false);
       if (mounted) await mostrarErrorAccion(context, e, prefijo: 'No se pudo editar: ');
+    } finally {
+      _esperar(false);
+      if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// v3.13 §4.9: borrar las horas (solo horas, sin control de jornada, sin
+  /// apertura previa). Si se borran, ya no hay nada que firmar: se vuelve atrás.
+  Future<void> _borrarHoras(Recurso r) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    var borradas = false;
+    try {
+      borradas = await borrarHorasDialog(
+        context,
+        ref,
+        taskId: r.id,
+        nombre: r.recurso,
+        obs: r.obsAlbaran ?? r.declarado?.obs,
+        madreId: _id,
+        alEnviar: () => _esperar(true),
+      );
+    } finally {
+      _esperar(false);
+      if (mounted) setState(() => _busy = false);
+    }
+    if (borradas && mounted) Navigator.pop(context);
   }
 
   // ─────────────────────────── Documento ───────────────────────────
@@ -351,7 +390,7 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
     // envía el enlace desde el detalle.
     final puedeDiferir = (permisos?.firmaDiferida ?? false) && t.firma?.faltaFirma != true;
 
-    return Scaffold(
+    final pantalla = Scaffold(
       appBar: AppBar(title: const Text('Firmar servicio')),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -413,6 +452,15 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
         ],
       ),
     );
+
+    // v3.13: la capa tapa toda la pantalla mientras se guardan las horas.
+    return Stack(children: [
+      pantalla,
+      if (_esperando)
+        const Positioned.fill(
+          child: EsperaRelax(mensajes: ['Guardando las horas…', 'Actualizando el resumen…']),
+        ),
+    ]);
   }
 
   /// Bloque "Quién firma": firmante elegido (visible durante toda la firma),
@@ -603,13 +651,25 @@ class _SignatureScreenState extends ConsumerState<SignatureScreen> {
   Widget _filaResumen(Recurso r, {bool editable = true}) {
     final res = r.resumenAlbaran;
     final editar = editable && r.esMio;
+    // v3.13 §4.9: borrar horas (solo horas + sin control de jornada, sin apertura previa).
+    final borrar = editar &&
+        r.cerrada &&
+        !r.iniciada &&
+        puedeBorrarHoras(ref.read(sessionControllerProvider).profile?.config);
     return InkWell(
-      onTap: editar ? () => _editarRecurso(r) : null,
+      onTap: editar && !_busy ? () => _editarRecurso(r) : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             Expanded(child: Text(r.recurso, style: const TextStyle(fontWeight: FontWeight.w600))),
+            if (borrar)
+              IconButton(
+                tooltip: 'Borrar horas',
+                visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.delete_outline, size: 20, color: Colors.red.shade700),
+                onPressed: _busy ? null : () => _borrarHoras(r),
+              ),
             if (editar) const Icon(Icons.edit, size: 16, color: Colors.black38),
           ]),
           if (res != null)

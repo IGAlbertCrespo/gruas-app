@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../features/auth/session_models.dart';
 import 'horas.dart';
 import 'observaciones_dialog.dart';
+import 'odoo_dt.dart';
 import 'pausa_dialog.dart' show fmtHoras;
 
 // v3.10 — Pantalla única para declarar el tiempo al terminar (CONTRATO §4.1,
@@ -59,6 +60,30 @@ class TiempoDeclarado {
 
   double get comidaHoras => comidaMin / 60.0;
 
+  /// v3.13 §3 — bloque `declarado` del servidor: lo que el conductor declaró al
+  /// cerrar, para precargar el formulario al editar. null si no viene o si el
+  /// formato no se reconoce (se usan los valores de partida de siempre).
+  static TiempoDeclarado? fromJson(dynamic j) {
+    if (j is! Map) return null;
+    final wire = j['formato']?.toString();
+    FormatoCierre? formato;
+    for (final f in FormatoCierre.values) {
+      if (f.wire == wire) formato = f;
+    }
+    if (formato == null) return null;
+    final comida = j['comida'];
+    final obs = j['obs']?.toString().trim();
+    return TiempoDeclarado(
+      formato: formato,
+      inicio: parseOdooDt(j['inicio']?.toString()),
+      fin: parseOdooDt(j['fin']?.toString()),
+      horas: (j['horas'] as num?)?.toDouble(),
+      comidaMin: comida is Map ? ((comida['minutos'] as num?)?.toInt() ?? 0) : 0,
+      comidaInicio: comida is Map ? parseOdooDt(comida['inicio']?.toString()) : null,
+      obs: (obs == null || obs.isEmpty) ? null : obs,
+    );
+  }
+
   /// Bruto para el cálculo provisional: H, o la ventana en `inicio_fin`.
   double get bruto {
     final i = inicio, f = fin;
@@ -74,6 +99,8 @@ class TiempoDeclarado {
 /// - [inicioReal]: inicio de la tarea iniciada en la APP (sin solo horas).
 /// - [inicioPropuesto]: con solo horas, la hora planificada.
 /// - [dia]: día al que se limita la hora de inicio (planificado o `fecha`).
+/// - [inicial] (v3.13): lo ya declarado (bloque `declarado` del servidor). Al
+///   editar, el formulario se abre con esos valores y no con los de partida.
 Future<TiempoDeclarado?> pedirTiempo(
   BuildContext context, {
   required List<FormatoCierre> formatos,
@@ -87,6 +114,7 @@ Future<TiempoDeclarado?> pedirTiempo(
   bool conObservaciones = false,
   String? obsInicial,
   bool avisoCliente = false,
+  TiempoDeclarado? inicial,
 }) {
   assert(formatos.isNotEmpty);
   return Navigator.of(context).push<TiempoDeclarado>(
@@ -104,6 +132,7 @@ Future<TiempoDeclarado?> pedirTiempo(
         conObservaciones: conObservaciones,
         obsInicial: obsInicial,
         avisoCliente: avisoCliente,
+        inicial: inicial,
       ),
     ),
   );
@@ -122,6 +151,7 @@ class _FormularioTiempo extends StatefulWidget {
     this.conObservaciones = false,
     this.obsInicial,
     this.avisoCliente = false,
+    this.inicial,
   });
 
   final List<FormatoCierre> formatos;
@@ -135,25 +165,35 @@ class _FormularioTiempo extends StatefulWidget {
   final bool conObservaciones;
   final String? obsInicial;
   final bool avisoCliente;
+  final TiempoDeclarado? inicial;
 
   @override
   State<_FormularioTiempo> createState() => _FormularioTiempoState();
 }
 
 class _FormularioTiempoState extends State<_FormularioTiempo> {
-  late FormatoCierre _formato = widget.formatos.first;
+  /// v3.13: lo ya declarado, solo si su formato sigue permitido en la compañía.
+  late final TiempoDeclarado? _previo =
+      (widget.inicial != null && widget.formatos.contains(widget.inicial!.formato))
+          ? widget.inicial
+          : null;
+  late FormatoCierre _formato = _previo?.formato ?? widget.formatos.first;
+  /// Inicio RECIBIDO (real o planificado): referencia de `inicioCambiado`.
   late final DateTime? _inicioOriginal = (widget.inicioReal ?? widget.inicioPropuesto)?.toLocal();
-  late DateTime? _inicio = _inicioOriginal;
-  late double _horas = horasInicialesV310(
-    inicioReal: widget.inicioReal,
-    previstas: widget.horasPrevistas,
-    pasoMin: _pasoMin,
-  );
+  late DateTime? _inicio = (_previo != null && _previo!.formato.pideInicio)
+      ? (_previo!.inicio?.toLocal() ?? _inicioOriginal)
+      : _inicioOriginal;
+  late double _horas = _previo?.horas ??
+      horasInicialesV310(
+        inicioReal: widget.inicioReal,
+        previstas: widget.horasPrevistas,
+        pasoMin: _pasoMin,
+      );
   DateTime? _fin;
-  late int _comidaMin = widget.cfg.comidaDefectoMin;
+  late int _comidaMin = _comidaInicialMin();
   DateTime? _comidaInicio;
   bool _comidaInicioManual = false;
-  late String _obs = (widget.obsInicial ?? '').trim();
+  late String _obs = (widget.obsInicial ?? _previo?.obs ?? '').trim();
 
   int get _pasoMin => widget.cfg.tiempo.pasoMin;
   double get _paso => widget.cfg.tiempo.pasoHoras;
@@ -164,8 +204,26 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
   @override
   void initState() {
     super.initState();
-    _fin = _finInicial();
-    _recalcularComida();
+    final previo = _previo;
+    _fin = previo?.fin?.toLocal() ?? _finInicial();
+    final ci = previo?.comidaInicio;
+    if (ci != null && _comidaMin > 0) {
+      // v3.13: la hora de comida declarada se respeta (no se recalcula).
+      _comidaInicio = ci.toLocal();
+      _comidaInicioManual = true;
+    } else {
+      _recalcularComida();
+    }
+  }
+
+  /// Comida inicial: la declarada si sigue entre las opciones de la compañía;
+  /// si no (o si no hay nada declarado), la de por defecto.
+  int _comidaInicialMin() {
+    final previo = _previo;
+    if (previo == null) return widget.cfg.comidaDefectoMin;
+    final m = previo.comidaMin;
+    if (m == 0 || widget.cfg.comidaOpciones.any((o) => o.minutos == m)) return m;
+    return widget.cfg.comidaDefectoMin;
   }
 
   // ------------------------------------------------------------------ valores

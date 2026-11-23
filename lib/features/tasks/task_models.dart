@@ -1,3 +1,4 @@
+import '../../shared/formulario_tiempo.dart' show TiempoDeclarado;
 import '../../shared/odoo_dt.dart';
 import 'task_v3_models.dart';
 export 'task_v3_models.dart';
@@ -183,6 +184,8 @@ class Recurso {
   /// v3.12 §4.9: observaciones del albarán del recurso y si el conductor las puede editar.
   final String? obsAlbaran;
   final bool obsEditable;
+  /// v3.13 §3: lo declarado al cerrar (para editar). null si no está cerrado.
+  final TiempoDeclarado? declarado;
 
   const Recurso({
     required this.id, required this.recurso, this.empleado,
@@ -190,7 +193,7 @@ class Recurso {
     required this.hayTramoAbierto, required this.horasFacturar,
     required this.servicioMinimo, required this.incidencia,
     this.aperturaInformada, required this.aplicarMinimo, this.resumenAlbaran,
-    this.horasPrevistas, this.obsAlbaran, this.obsEditable = false,
+    this.horasPrevistas, this.obsAlbaran, this.obsEditable = false, this.declarado,
   });
 
   factory Recurso.fromJson(Map<String, dynamic> j) => Recurso(
@@ -210,6 +213,7 @@ class Recurso {
         horasPrevistas: (j['horas_previstas'] as num?)?.toDouble(),
         obsAlbaran: j['obs_albaran']?.toString(),
         obsEditable: j['obs_editable'] == true,
+        declarado: TiempoDeclarado.fromJson(j['declarado']), // v3.13
       );
 }
 
@@ -268,6 +272,8 @@ class TaskDetail extends TaskSummary {
   // --- v3.12 §4.9: en todas las tareas (las no facturables no llevan worksheet) ---
   final String? obsAlbaran;
   final bool obsEditable;
+  // --- v3.13 §3: lo declarado al completar (solo no facturables) ---
+  final TiempoDeclarado? declarado;
 
   const TaskDetail({
     required super.id,
@@ -313,6 +319,7 @@ class TaskDetail extends TaskSummary {
     this.resumenAlbaran,
     this.obsAlbaran,
     this.obsEditable = false,
+    this.declarado,
   });
 
   bool get hayTramoAbierto => tramos.any((t) => t.abierto);
@@ -353,6 +360,7 @@ class TaskDetail extends TaskSummary {
       resumenAlbaran: ResumenAlbaran.fromJson(j['resumen_albaran']),
       obsAlbaran: j['obs_albaran']?.toString(),
       obsEditable: j['obs_editable'] == true,
+      declarado: TiempoDeclarado.fromJson(j['declarado']), // v3.13
       fechaCompletada: parseOdooDt(j['fecha_completada']?.toString()),
       carga: Address.fromJson((j['carga'] ?? {}) as Map<String, dynamic>),
       descarga: Address.fromJson((j['descarga'] ?? {}) as Map<String, dynamic>),
