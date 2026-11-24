@@ -1,6 +1,7 @@
 # gruas_app
 
 A new Flutter project.
+24-11-2026 V15
 
 ## Getting Started
 
