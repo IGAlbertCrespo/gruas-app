@@ -124,10 +124,19 @@ class TiempoConfig {
   final int pasoMin;
   final int redondeoMin;
   final int toleranciaMin;
+  /// v3.14: margen (min) hacia el futuro para la hora de fin al cerrar. Un
+  /// servidor anterior no lo envía: 15 min, como antes.
+  final int cierreToleranciaMin;
 
-  const TiempoConfig({this.pasoMin = 30, this.redondeoMin = 30, this.toleranciaMin = 15});
+  const TiempoConfig({
+    this.pasoMin = 30,
+    this.redondeoMin = 30,
+    this.toleranciaMin = 15,
+    this.cierreToleranciaMin = 15,
+  });
 
   double get pasoHoras => pasoMin / 60.0;
+  Duration get cierreTolerancia => Duration(minutes: cierreToleranciaMin);
 
   factory TiempoConfig.fromJson(dynamic j) {
     if (j is! Map) return const TiempoConfig();
@@ -139,6 +148,9 @@ class TiempoConfig {
       pasoMin: paso > 0 ? paso : 30,
       redondeoMin: u,
       toleranciaMin: leer('tolerancia_min', 15).clamp(0, u).toInt(),
+      cierreToleranciaMin: leer('cierre_tolerancia_min', 15) < 0
+          ? 0
+          : leer('cierre_tolerancia_min', 15),
     );
   }
 }

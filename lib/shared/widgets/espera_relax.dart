@@ -180,8 +180,8 @@ class _GanchoPainter extends CustomPainter {
       ..color = estructura
       ..strokeWidth = 2
       ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(12, yPluma - 6), Offset(size.width - 12, yPluma - 6), pluma);
-    canvas.drawLine(Offset(12, yPluma + 2), Offset(size.width - 12, yPluma + 2), pluma);
+    canvas.drawLine(const Offset(12, yPluma - 6), Offset(size.width - 12, yPluma - 6), pluma);
+    canvas.drawLine(const Offset(12, yPluma + 2), Offset(size.width - 12, yPluma + 2), pluma);
     for (var x = 12.0; x < size.width - 20; x += 16) {
       canvas.drawLine(Offset(x, yPluma + 2), Offset(x + 8, yPluma - 6), pluma);
       canvas.drawLine(Offset(x + 8, yPluma - 6), Offset(x + 16, yPluma + 2), pluma);
@@ -200,13 +200,13 @@ class _GanchoPainter extends CustomPainter {
     canvas.rotate(-angulo);
 
     // Halo que respira, detrás del gancho.
-    final centroHalo = const Offset(0, _cable + 22);
+    const centroHalo = Offset(0, _cable + 22);
     canvas.drawCircle(
       centroHalo,
       38 * halo,
       Paint()
         ..shader = RadialGradient(
-          colors: [fondo.withOpacity(0.85), fondo.withOpacity(0.0)],
+          colors: [fondo.withValues(alpha: 0.85), fondo.withValues(alpha: 0.0)],
         ).createShader(Rect.fromCircle(center: centroHalo, radius: 38 * halo)),
     );
 

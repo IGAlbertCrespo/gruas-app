@@ -221,14 +221,17 @@ DateTime finTrasInicio(DateTime inicio, int hora, int minuto) {
   return f.isAfter(ini) ? f : DateTime(ini.year, ini.month, ini.day + 1, hora, minuto);
 }
 
-/// Futuro más allá de [toleranciaFuturo].
-bool esFuturo(DateTime d, {DateTime? ahora}) =>
-    d.difference(ahora ?? DateTime.now()) > toleranciaFuturo;
+/// Futuro más allá de [tolerancia] (por defecto [toleranciaFuturo], 15 min).
+/// v3.14: al cerrar se pasa la tolerancia de cierre de la compañía.
+bool esFuturo(DateTime d, {DateTime? ahora, Duration? tolerancia}) =>
+    d.difference(ahora ?? DateTime.now()) > (tolerancia ?? toleranciaFuturo);
 
-/// Máximo de horas (múltiplo de 0,5 por defecto) desde [inicio] hasta ahora,
-/// acotado a [horasTotalesMin]..[horasTotalesMax]: el fin nunca queda futuro.
-double horasMaxHasta(DateTime inicio, {DateTime? ahora}) {
-  final h = (horasDesde(inicio, ahora: ahora) * 2).floorToDouble() / 2;
+/// Máximo de horas (múltiplo de 0,5 por defecto) desde [inicio] hasta ahora
+/// (+ [margen], v3.14: tolerancia de cierre), acotado a
+/// [horasTotalesMin]..[horasTotalesMax].
+double horasMaxHasta(DateTime inicio, {DateTime? ahora, Duration margen = Duration.zero}) {
+  final hasta = (ahora ?? DateTime.now()).add(margen);
+  final h = (horasDesde(inicio, ahora: hasta) * 2).floorToDouble() / 2;
   return h.clamp(horasTotalesMin, horasTotalesMax).toDouble();
 }
 

@@ -375,6 +375,10 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
         ? round30(horasEntre(t.aperturaInformada!, t.cierreInformada!))
         : null;
     final desde = t.fechaServicio ?? DateTime.now(); // sin fecha programada: solo hoy
+    // v3.14: el fin puede adelantarse a ahora hasta la tolerancia de cierre.
+    final margen = (ref.read(sessionControllerProvider).profile?.config.tiempo ??
+            const TiempoConfig())
+        .cierreTolerancia;
 
     return showModalBottomSheet<({DateTime inicio, DateTime fin, String? obs})>(
       context: context,
@@ -387,7 +391,7 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
             setSheet(() {
               inicio = h;
               if (duracion != null) {
-                duracion = duracion!.clamp(horasTotalesMin, horasMaxHasta(h)).toDouble();
+                duracion = duracion!.clamp(horasTotalesMin, horasMaxHasta(h, margen: margen)).toDouble();
               }
             });
           }
@@ -400,7 +404,7 @@ class _NonBillableDetailScreenState extends ConsumerState<NonBillableDetailScree
               inicial: duracion ?? horasTotalesIniciales(apertura: ini),
               apertura: ini,
               titulo: '¿Cuánto duró?',
-              maximo: horasMaxHasta(ini),
+              maximo: horasMaxHasta(ini, margen: margen),
             );
             if (res == null) return;
             setSheet(() => duracion = res.horas);

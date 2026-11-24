@@ -180,8 +180,8 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
   late FormatoCierre _formato = _previo?.formato ?? widget.formatos.first;
   /// Inicio RECIBIDO (real o planificado): referencia de `inicioCambiado`.
   late final DateTime? _inicioOriginal = (widget.inicioReal ?? widget.inicioPropuesto)?.toLocal();
-  late DateTime? _inicio = (_previo != null && _previo!.formato.pideInicio)
-      ? (_previo!.inicio?.toLocal() ?? _inicioOriginal)
+  late DateTime? _inicio = (_previo != null && _previo.formato.pideInicio)
+      ? (_previo.inicio?.toLocal() ?? _inicioOriginal)
       : _inicioOriginal;
   late double _horas = _previo?.horas ??
       horasInicialesV310(
@@ -196,6 +196,9 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
   late String _obs = (widget.obsInicial ?? _previo?.obs ?? '').trim();
 
   int get _pasoMin => widget.cfg.tiempo.pasoMin;
+  /// v3.14: cuánto puede adelantarse la hora de fin respecto a ahora.
+  Duration get _tolCierre => widget.cfg.tiempo.cierreTolerancia;
+  String get _limiteFin => _hm(DateTime.now().add(_tolCierre));
   double get _paso => widget.cfg.tiempo.pasoHoras;
   ReglaComida get _regla => reglaComidaDe(widget.cfg.comida);
   bool get _pideComida => widget.cfg.preguntaComida(_formato);
@@ -282,7 +285,9 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
     if (_formato == FormatoCierre.inicioFin) {
       final fin = _fin;
       if (ini == null || fin == null) return 'Indica la hora de fin.';
-      if (esFuturo(fin)) return 'El fin no puede ser posterior a ahora.';
+      if (esFuturo(fin, tolerancia: _tolCierre)) {
+        return 'El fin no puede ser posterior a las $_limiteFin.';
+      }
       final c = _comidaEfectiva;
       if (c > 0) {
         final ci = _comidaInicio;
@@ -291,8 +296,10 @@ class _FormularioTiempoState extends State<_FormularioTiempo> {
           return 'La comida debe quedar dentro del horario (${_hm(ini)} – ${_hm(fin)}).';
         }
       }
-    } else if (_formato.pideInicio && ini != null && esFuturo(_finHoras(ini))) {
-      return 'Con ese inicio y esas horas, el fin quedaría posterior a ahora.';
+    } else if (_formato.pideInicio &&
+        ini != null &&
+        esFuturo(_finHoras(ini), tolerancia: _tolCierre)) {
+      return 'Con ese inicio y esas horas, el fin quedaría posterior a las $_limiteFin.';
     }
     return null;
   }
